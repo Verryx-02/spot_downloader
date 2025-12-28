@@ -108,7 +108,7 @@ SEARCH_OPTIONS = [
 # =============================================================================
 
 # Maximum number of retry attempts for API calls
-MAX_SEARCH_RETRIES = 10
+MAX_SEARCH_RETRIES = 8
 
 # Base delay between retries (seconds) - uses exponential backoff with jitter
 RETRY_DELAY_BASE = 2.0
@@ -372,7 +372,7 @@ class YouTubeMatcher:
         results = self._search_by_text(search_query)
         
         if not results:
-            logger.warning(f"No results found for: {track.artist} - {track.name}")
+            logger.debug(f"No results found for: {track.artist} - {track.name}")
             return MatchResult.failure(
                 spotify_id=track.spotify_id,
                 reason=f"No results found for search query: {search_query}"
@@ -382,7 +382,7 @@ class YouTubeMatcher:
         filtered = self._filter_by_duration(results, track.duration_ms)
         
         if not filtered:
-            logger.warning(
+            logger.debug(
                 f"No results within duration tolerance for: "
                 f"{track.artist} - {track.name}"
             )
@@ -398,7 +398,7 @@ class YouTubeMatcher:
         best, alternatives = self._select_best_match(scored, track)
         
         if best is None:
-            logger.warning(
+            logger.debug(
                 f"No results above minimum score for: "
                 f"{track.artist} - {track.name}"
             )
@@ -545,7 +545,7 @@ class YouTubeMatcher:
                     except TransientSearchError as e:
                         # Transient error - do NOT mark as failed
                         # Track remains pending and will be retried next run
-                        logger.warning(
+                        logger.debug(
                             f"Transient error matching {track.artist} - {track.name}: {e}. "
                             f"Track will be retried on next run."
                         )
@@ -557,7 +557,7 @@ class YouTubeMatcher:
                         progress_bar.update(matched=False)
                         
                     except Exception as e:
-                        logger.error(
+                        logger.debug(
                             f"Error matching {track.artist} - {track.name}: {e}"
                         )
                         results_map[track.spotify_id] = MatchResult.failure(
@@ -646,9 +646,7 @@ class YouTubeMatcher:
                     )
                     if is_rate_limit:
                         log_msg += " (rate limit detected)"
-                        logger.warning(log_msg)
-                    else:
-                        logger.debug(log_msg)
+                    logger.debug(log_msg)
                     
                     time.sleep(delay)
                 else:
@@ -657,12 +655,12 @@ class YouTubeMatcher:
                     is_transient = self._is_transient_error(error_str)
                     
                     if is_transient:
-                        logger.warning(
+                        logger.debug(
                             f"Search failed after {MAX_SEARCH_RETRIES} attempts (transient): {last_exception}"
                         )
                         raise TransientSearchError(str(last_exception)) from last_exception
                     else:
-                        logger.error(
+                        logger.debug(
                             f"Search failed after {MAX_SEARCH_RETRIES} attempts: {last_exception}"
                         )
         

@@ -334,7 +334,7 @@ class Downloader:
                     except Exception as e:
                         stats.failed += 1
                         progress.update(success=False)
-                        logger.error(f"Unexpected error downloading {artist} - {track_name}: {e}")
+                        logger.debug(f"Unexpected error downloading {artist} - {track_name}: {e}")
         
         # Log final statistics
         logger.info(
@@ -532,7 +532,7 @@ class Downloader:
             # YouTube rate limiting can last up to an hour
             # Don't waste time with short retries - just fail and let user retry later
             if attempt == 0:
-                logger.warning(
+                logger.debug(
                     "YouTube rate limiting detected. Consider reducing threads "
                     "or waiting before re-running. Track will be retried on next run."
                 )
@@ -550,10 +550,10 @@ class Downloader:
         elif error_type == ErrorType.AGE_RESTRICTED:
             # Age restriction: Only retry if we have cookies (might be expired)
             if self._cookie_file is not None and attempt == 0:
-                logger.warning("Age-restricted video - cookies may be expired")
+                logger.debug("Age-restricted video - cookies may be expired")
                 return (True, 1.0)
             else:
-                logger.warning(
+                logger.debug(
                     "Age-restricted video requires cookies. "
                     "Add cookie_file to config.yaml"
                 )
@@ -668,6 +668,10 @@ class Downloader:
             # Sleep between requests to avoid rate limiting
             # This is especially important with multiple threads
             "sleep_interval_requests": 1,  # 1 second between requests
+            
+            # Enable remote JS challenge solver (requires deno)
+            # This is needed for some age-restricted/protected videos
+            "remote_components": "ejs:github",
             
             # Try multiple YouTube player clients (fixes "format not available")
             # This is the key fix from spotDL issues
