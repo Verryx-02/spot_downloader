@@ -286,6 +286,52 @@ YouTube is temporarily blocking requests:
 - Without cookies, YouTube limits quality to 128 kbps
 - Use a cookie file with YouTube Premium for 256 kbps
 
+## Project Structure
+
+``` bash
+spot_downloader
+├── Asset
+│   ├── banner.png
+│   ├── Demo_phase1_2.mov
+│   └── support_me_on_kofi_beige.png
+├── config.yaml.example
+├── LICENSE
+├── pyproject.toml
+├── README.md
+└── spot_downloader
+    ├── __init__.py
+    ├── cli.py                    # CLI entry point
+    ├── core
+    │   ├── __init__.py
+    │   ├── config.py             # Configuration loading
+    │   ├── database.py           # SQLite database
+    │   ├── exceptions.py         # Custom exceptions
+    │   ├── file_manager.py       # Hard link architecture
+    │   ├── logger.py             # Multi-file logging
+    │   └── progress.py           # Progress bars for all phases
+    ├── download
+    │   ├── __init__.py
+    │   ├── downloader.py         # PHASE 3: Audio download
+    │   ├── embed_phase.py        # PHASE 5: Metadata embedding
+    │   ├── lyrics_phase.py       # PHASE 4: Lyrics fetching
+    │   ├── lyrics.py             # Lyrics providers
+    │   └── metadata.py           # M4A metadata handling
+    ├── spotify
+    │   ├── __init__.py
+    │   ├── client.py             # Spotify API client
+    │   ├── fetcher.py            # PHASE 1: Metadata fetching
+    │   └── models.py             # Track, Playlist dataclasses
+    ├── utils
+    │   ├── __init__.py
+    │   └── replace.py            # --replace functionality
+    └── youtube
+        ├── __init__.py
+        ├── matcher.py            # PHASE 2: YouTube matching
+        └── models.py             # MatchResult dataclass
+
+8 directories, 33 files
+```
+
 ## Metadata Tags
 
 The following metadata is embedded in each M4A file:
