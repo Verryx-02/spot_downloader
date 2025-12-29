@@ -139,7 +139,7 @@ logger = get_logger(__name__)
 
 
 # Version string (if updated, update also in config.toml)
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 @click.group(invoke_without_command=True)
@@ -500,14 +500,11 @@ def _run_download(options: dict) -> None:
                 logger.warning("PHASE 3 not yet implemented - skipping")
         
         if options["run_phase4"]:
-            try:
-                _run_phase4(
-                    database=database,
-                    playlist_id=playlist_id,
-                    num_threads=config.download.download_threads
-                )
-            except NotImplementedError:
-                logger.warning("PHASE 4 not yet implemented - skipping")
+            _run_phase4(
+                database=database,
+                output_dir=config.output.directory,
+                num_threads=2 # reduced to avoid rate limiting
+            )
 
         if options["run_phase5"]:
             try:
@@ -1034,37 +1031,52 @@ def _run_phase3(
 
 def _run_phase4(
     database: Database,
-    playlist_id: str,
-    num_threads: int
+    output_dir: Path,
+    num_threads: int = 2
 ) -> None:
     """
     Run PHASE 4: Fetch lyrics for downloaded tracks.
     
     Args:
         database: Database instance.
-        playlist_id: Playlist ID for database queries.
+        output_dir: Output directory for .lrc files.
         num_threads: Number of parallel fetching threads.
     
     Behavior:
         1. Log phase start
-        2. Get tracks that are downloaded but don't have lyrics_fetched=True
+        2. Get tracks that are downloaded but don't have lyrics
         3. For each track:
            a. Attempt to fetch lyrics from multiple providers
-           b. If found: store lyrics in database (lyrics_text, lyrics_synced, lyrics_source)
-           c. If not found: log to lyrics_failures.log
-           d. Mark lyrics_fetched=True regardless of success
+           b. If found: store lyrics in database, create .lrc file
+           c. If not found: log to lyrics_failures.log (no DB update)
         4. Log lyrics fetch statistics
     
     Database Updates:
         - Sets lyrics_text, lyrics_synced, lyrics_source for successful fetches
-        - Sets lyrics_fetched=True for all processed tracks
+        - Sets lyrics_fetched=True ONLY for tracks where lyrics were found
+        - Tracks without lyrics remain pending for retry on next run
     
     Logging:
         - INFO: Phase start, progress, completion
         - DEBUG: Individual track processing
         - Writes to lyrics_failures.log for tracks without lyrics
     """
-    raise NotImplementedError("Contract only - implementation pending")
+    logger.info("=" * 60)
+    logger.info("PHASE 4: Fetching lyrics")
+    logger.info("=" * 60)
+    
+    stats = fetch_lyrics_phase4(
+        database=database,
+        output_dir=output_dir,
+        num_threads=num_threads
+    )
+    
+    # Log results
+    logger.info(f"Lyrics results: {stats.found}/{stats.total} found ({stats.found_rate:.1f}%)")
+    if stats.synced > 0:
+        logger.info(f"Synced lyrics: {stats.synced} ({stats.lrc_created} LRC files created)")
+    if stats.not_found > 0:
+        logger.info(f"Not found: {stats.not_found} (will retry on next run)")
 
 
 def _run_phase5(

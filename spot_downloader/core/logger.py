@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TextIO
 from datetime import datetime
 
-from tqdm import tqdm
+from rich import get_console
 
 
 # Log file names (created in output directory)
@@ -110,57 +110,50 @@ class ColoredConsoleFormatter(logging.Formatter):
         
         return message
 
-class TqdmLoggingHandler(logging.Handler):
+class RichLoggingHandler(logging.Handler):
     """
-    Custom logging handler that writes to console without breaking tqdm progress bars.
+    Custom logging handler that writes to console without breaking Rich progress bars.
     
-    tqdm progress bars write to stderr and use carriage returns to update in-place.
+    Rich progress bars use the console and update in-place.
     Standard logging to stderr can interfere with this, causing visual glitches.
-    This handler uses tqdm.write() which properly coordinates with active progress bars.
-    
-    Attributes:
-        stream: The output stream (defaults to sys.stderr).
+    This handler uses rich.console.print() which properly coordinates with active progress bars.
     
     Behavior:
         - Formats the log record using the handler's formatter
-        - Writes using tqdm.write() to avoid progress bar corruption
+        - Writes using rich.console.print() to avoid progress bar corruption
         - Messages appear above any active progress bars
     
     Example:
-        handler = TqdmLoggingHandler()
-        handler.setFormatter(logging.Formatter(CONSOLE_LOG_FORMAT))
+        handler = RichLoggingHandler()
+        handler.setFormatter(ColoredConsoleFormatter())
         logger.addHandler(handler)
     """
     
-    def __init__(self, stream: TextIO = sys.stderr) -> None:
+    def __init__(self) -> None:
         """
-        Initialize the tqdm-compatible handler.
-        
-        Args:
-            stream: Output stream for log messages. Defaults to stderr
-                    which is where tqdm also writes by default.
+        Initialize the Rich-compatible handler.
         """
         super().__init__()
-        self.stream = stream
+        self._console = get_console()
     
     def emit(self, record: logging.LogRecord) -> None:
         """
-        Emit a log record using tqdm.write() for proper progress bar compatibility.
+        Emit a log record using rich.console.print() for proper progress bar compatibility.
         
         Args:
             record: The log record to emit.
         
         Behavior:
             1. Format the record using the handler's formatter
-            2. Write to stream using tqdm.write()
+            2. Write to console using rich.console.print()
             3. Handle any exceptions by calling handleError()
         
         Thread Safety:
-            This method is thread-safe as tqdm.write() handles synchronization.
+            This method is thread-safe as rich.console handles synchronization.
         """
         try:
             msg = self.format(record)
-            tqdm.write(msg, file=self.stream)
+            self._console.print(msg, highlight=False, markup=False)
         except Exception:
             self.handleError(record)
 
@@ -621,8 +614,8 @@ def setup_logging(output_dir: Path) -> None:
     # Remove any existing handlers
     root_logger.handlers.clear()
     
-    # Console handler (tqdm-compatible) with colors
-    console_handler = TqdmLoggingHandler()
+    # Console handler (Rich-compatible) with colors
+    console_handler = RichLoggingHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(ColoredConsoleFormatter())
     root_logger.addHandler(console_handler)

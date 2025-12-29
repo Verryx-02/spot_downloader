@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spot-downloader"
-version = "0.3.0"
+version = "0.4.0"
 description = "Download Spotify playlists via YouTube Music in M4A format"
 readme = "README.md"
 license = {text = "MIT"}
@@ -50,6 +50,9 @@ dependencies = [
     
     # Lyrics fetching (optional but included)
     "syncedlyrics>=0.7.0",
+    "syncedlyrics>=1.0.1",
+    "beautifulsoup4>=4.14.0",
+    "requests>=2.32.0",
     
     # HTTP requests (for cover art, lyrics scraping)
     "requests>=2.31.0",
