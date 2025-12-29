@@ -30,6 +30,17 @@ Audio Quality:
     - YouTube Premium (with cookies): 256 kbps
     Quality is auto-detected based on cookie file.
 
+Rate Limiting:
+    YouTube enforces strict rate limits on downloads:
+    - Guest session: ~300 videos/hour (~5/min)
+    - With cookies: ~2000 videos/hour (~33/min)
+    
+    To avoid rate limiting, this module uses:
+    - Single thread (num_threads=1) - multiple threads cause simultaneous requests
+    - Sleep delay of 10-20 seconds between downloads (yt-dlp "-t sleep" preset)
+    
+    With these settings, expect ~15 seconds per track (~4 tracks/minute).
+
 File Naming:
     - Canonical (in tracks/): {title}-{artist}.m4a
     - Playlist links: {position:05d}-{title}-{artist}.m4a
@@ -46,7 +57,7 @@ Usage:
         output_dir=Path("/music"),
         playlist_id=playlist_id,
         cookie_file=Path("cookies.txt"),  # Optional
-        num_threads=4
+        num_threads=1  # Use 1 thread to avoid YouTube rate limiting
     )
     print(f"Downloaded: {stats.downloaded}/{stats.total}")
 """
@@ -243,7 +254,7 @@ class Downloader:
         database: Database,
         output_dir: Path,
         cookie_file: Path | None = None,
-        num_threads: int = 4
+        num_threads: int = 1
     ) -> None:
         """
         Initialize the Downloader.
@@ -255,6 +266,7 @@ class Downloader:
                         YouTube Premium quality (256 kbps).
                         If None, downloads at 128 kbps.
             num_threads: Default number of parallel download threads.
+                        Recommended: 1 to avoid YouTube rate limiting.
         """
         self._database = database
         self._file_manager = FileManager(output_dir)
@@ -666,8 +678,17 @@ class Downloader:
             "fragment_retries": 3,
             
             # Sleep between requests to avoid rate limiting
-            # This is especially important with multiple threads
-            "sleep_interval_requests": 1,  # 1 second between requests
+            # Values from yt-dlp official "-t sleep" preset
+            # See: https://github.com/yt-dlp/yt-dlp/wiki/Extractors
+            "sleep_interval_requests": 0.75,  # 0.75s between HTTP requests
+            
+            # Sleep between downloads (crucial for avoiding 403/rate limit)
+            # Official yt-dlp "sleep" preset values:
+            # - Guest session limit: ~300 videos/hour (~5/min)
+            # - With cookies: ~2000 videos/hour (~33/min)
+            # Random delay between 10-20 seconds before each video download
+            "sleep_interval": 10,       # Minimum seconds before each download
+            "max_sleep_interval": 20,   # Maximum seconds (random between min-max)
             
             # Enable remote JS challenge solver (requires deno)
             # This is needed for some age-restricted/protected videos
@@ -723,7 +744,7 @@ def download_tracks_phase3(
     output_dir: Path,
     playlist_id: str,
     cookie_file: Path | None = None,
-    num_threads: int = 4
+    num_threads: int = 1
 ) -> DownloadStats:
     """
     Convenience function for PHASE 3 track downloading.

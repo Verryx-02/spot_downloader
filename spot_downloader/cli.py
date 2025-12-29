@@ -126,6 +126,7 @@ from spot_downloader.download import (
     fetch_lyrics_phase4,
     embed_metadata_phase5,
 )
+from spot_downloader.download.lyrics_phase import LyricsStats
 from spot_downloader.utils.replace import replace_track_audio
 from spot_downloader.spotify import (
     SpotifyClient,
@@ -452,6 +453,7 @@ def _run_download(options: dict) -> None:
         
         # Run phases
         tracks = None
+        lyrics_stats = None
         
         # Handle sync_all mode (--sync without --url or --liked)
         if options.get("sync_all"):
@@ -500,10 +502,10 @@ def _run_download(options: dict) -> None:
                 logger.warning("PHASE 3 not yet implemented - skipping")
         
         if options["run_phase4"]:
-            _run_phase4(
+            lyrics_stats = _run_phase4(
                 database=database,
                 output_dir=config.output.directory,
-                num_threads=2 # reduced to avoid rate limiting
+                num_threads=config.download.lyrics_threads
             )
 
         if options["run_phase5"]:
@@ -522,7 +524,7 @@ def _run_download(options: dict) -> None:
             # Print global stats for sync_all mode
             _print_global_stats(database)
         elif playlist_id is not None:
-            _print_final_stats(database, playlist_id)
+            _print_final_stats(database, playlist_id, lyrics_stats)
         
         logger.info("spot-downloader completed successfully")
         
@@ -1060,6 +1062,9 @@ def _run_phase4(
         - INFO: Phase start, progress, completion
         - DEBUG: Individual track processing
         - Writes to lyrics_failures.log for tracks without lyrics
+    
+    Returns:
+        LyricsStats object with results.
     """
     logger.info("=" * 60)
     logger.info("PHASE 4: Fetching lyrics")
@@ -1071,12 +1076,7 @@ def _run_phase4(
         num_threads=num_threads
     )
     
-    # Log results
-    logger.info(f"Lyrics results: {stats.found}/{stats.total} found ({stats.found_rate:.1f}%)")
-    if stats.synced > 0:
-        logger.info(f"Synced lyrics: {stats.synced} ({stats.lrc_created} LRC files created)")
-    if stats.not_found > 0:
-        logger.info(f"Not found: {stats.not_found} (will retry on next run)")
+    return stats
 
 
 def _run_phase5(
@@ -1298,22 +1298,23 @@ def _handle_export(export_arg: str, copy_files: bool) -> None:
         sys.exit(1)
 
 
-def _print_final_stats(database: Database, playlist_id: str) -> None:
+def _print_final_stats(
+    database: Database,
+    playlist_id: str = None,
+    lyrics_stats: "LyricsStats | None" = None
+) -> None:
     """
-    Print final download statistics.
+    Print final download statistics (global).
     
     Args:
         database: Database instance.
-        playlist_id: Playlist ID to get stats for.
+        playlist_id: Deprecated, not used. Stats are always global.
+        lyrics_stats: Deprecated, not used. Stats are read from database.
     
     Output:
-        Prints a summary table with:
-        - Total tracks
-        - Matched tracks
-        - Downloaded tracks
-        - Failed tracks
+        Prints a summary table with global statistics.
     """
-    stats = database.get_playlist_stats(playlist_id)
+    stats = database.get_global_stats()
     
     logger.info("=" * 60)
     logger.info("FINAL STATISTICS")
@@ -1321,6 +1322,16 @@ def _print_final_stats(database: Database, playlist_id: str) -> None:
     logger.info(f"Total tracks:      {stats['total']}")
     logger.info(f"Matched:           {stats['matched']}")
     logger.info(f"Downloaded:        {stats['downloaded']}")
+    
+    # Lyrics statistics
+    if stats.get('with_lyrics', 0) > 0 or stats.get('without_lyrics', 0) > 0:
+        logger.info(f"With lyrics:       {stats['with_lyrics']}")
+        logger.info(f"  - Synced (LRC):  {stats['lyrics_synced']}")
+        logger.info(f"  - Plain text:    {stats['lyrics_plain']}")
+        logger.info(f"Without lyrics:    {stats['without_lyrics']}")
+        logger.info(f"LRC files:         {stats['lrc_files']}")
+        logger.info(f"LRC hard links:    {stats['lrc_hard_links']}")
+    
     logger.info(f"Failed to match:   {stats['failed_match']}")
     logger.info(f"Pending match:     {stats['pending_match']}")
     logger.info(f"Pending download:  {stats['pending_download']}")
@@ -1342,10 +1353,18 @@ def _print_global_stats(database: Database) -> None:
     logger.info("GLOBAL STATISTICS")
     logger.info("=" * 60)
     logger.info(f"Playlists:         {stats['playlists']}")
-    logger.info(f"Unique tracks:     {stats['total_tracks']}")
-    logger.info(f"Matched:           {stats['matched_tracks']}")
-    logger.info(f"Downloaded:        {stats['downloaded_tracks']}")
-    logger.info(f"With lyrics:       {stats['tracks_with_lyrics']}")
+    logger.info(f"Unique tracks:     {stats['total']}")
+    logger.info(f"Matched:           {stats['matched']}")
+    logger.info(f"Downloaded:        {stats['downloaded']}")
+    logger.info(f"With lyrics:       {stats['with_lyrics']}")
+    logger.info(f"  - Synced (LRC):  {stats['lyrics_synced']}")
+    logger.info(f"  - Plain text:    {stats['lyrics_plain']}")
+    logger.info(f"Without lyrics:    {stats['without_lyrics']}")
+    logger.info(f"LRC files:         {stats['lrc_files']}")
+    logger.info(f"LRC hard links:    {stats['lrc_hard_links']}")
+    logger.info(f"Failed to match:   {stats['failed_match']}")
+    logger.info(f"Pending match:     {stats['pending_match']}")
+    logger.info(f"Pending download:  {stats['pending_download']}")
     logger.info(f"Playlist links:    {stats['playlist_track_links']}")
     if stats['deduplication_ratio'] > 1:
         logger.info(f"Dedup ratio:       {stats['deduplication_ratio']}x (storage saved!)")

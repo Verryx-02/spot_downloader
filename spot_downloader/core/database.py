@@ -711,6 +711,41 @@ class Database:
                 conn.commit()
                 return cursor.rowcount
     
+    def reset_failed_lyrics(self) -> int:
+        """
+        Reset lyrics_fetched for tracks where lyrics were not found.
+        
+        This allows re-trying lyrics fetch for tracks that previously failed.
+        
+        Returns:
+            Number of tracks reset.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                now = self._now_iso()
+                cursor = conn.execute("""
+                    UPDATE global_tracks 
+                    SET lyrics_fetched = 0, updated_at = ?
+                    WHERE lyrics_fetched = 1 AND lyrics_text IS NULL
+                """, (now,))
+                conn.commit()
+                return cursor.rowcount
+    
+    def count_failed_lyrics(self) -> int:
+        """
+        Count tracks where lyrics fetch was attempted but not found.
+        
+        Returns:
+            Number of tracks with lyrics_fetched=1 and lyrics_text IS NULL.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks
+                    WHERE lyrics_fetched = 1 AND lyrics_text IS NULL
+                """)
+                return cursor.fetchone()[0]
+    
     # =========================================================================
     # Statistics
     # =========================================================================
@@ -722,7 +757,9 @@ class Database:
                 db_id = self._get_playlist_db_id(conn, playlist_id)
                 if db_id is None:
                     return {"total": 0, "matched": 0, "downloaded": 0, 
-                            "failed_match": 0, "pending_match": 0, "pending_download": 0}
+                            "failed_match": 0, "pending_match": 0, "pending_download": 0,
+                            "with_lyrics": 0, "lyrics_synced": 0, "lyrics_plain": 0,
+                            "without_lyrics": 0}
                 
                 stats = {}
                 
@@ -754,6 +791,42 @@ class Database:
                 stats["matched"] = stats["total"] - stats["pending_match"] - stats["failed_match"]
                 stats["pending_download"] = stats["matched"] - stats["downloaded"]
                 
+                # Lyrics statistics
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE pt.playlist_id = ? AND g.lyrics_text IS NOT NULL
+                """, (db_id,))
+                stats["with_lyrics"] = cursor.fetchone()[0]
+                
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE pt.playlist_id = ? AND g.lyrics_synced = 1
+                """, (db_id,))
+                stats["lyrics_synced"] = cursor.fetchone()[0]
+                
+                stats["lyrics_plain"] = stats["with_lyrics"] - stats["lyrics_synced"]
+                
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE pt.playlist_id = ? AND g.lyrics_fetched = 1 AND g.lyrics_text IS NULL
+                """, (db_id,))
+                stats["without_lyrics"] = cursor.fetchone()[0]
+                
+                # LRC files = synced lyrics count (one LRC per track in tracks/)
+                stats["lrc_files"] = stats["lyrics_synced"]
+                
+                # LRC hard links = count of playlist links for tracks with synced lyrics
+                # Each synced track can have multiple hard links (one per playlist it appears in)
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE g.lyrics_synced = 1
+                """)
+                stats["lrc_hard_links"] = cursor.fetchone()[0]
+                
                 return stats
     
     def get_global_stats(self) -> dict[str, int]:
@@ -766,27 +839,60 @@ class Database:
                 stats["playlists"] = cursor.fetchone()[0]
                 
                 cursor = conn.execute("SELECT COUNT(*) FROM global_tracks")
-                stats["total_tracks"] = cursor.fetchone()[0]
+                stats["total"] = cursor.fetchone()[0]
                 
                 cursor = conn.execute(
                     "SELECT COUNT(*) FROM global_tracks WHERE youtube_url IS NOT NULL AND youtube_url != ?",
                     (YOUTUBE_MATCH_FAILED,))
-                stats["matched_tracks"] = cursor.fetchone()[0]
+                stats["matched"] = cursor.fetchone()[0]
                 
                 cursor = conn.execute("SELECT COUNT(*) FROM global_tracks WHERE downloaded = 1")
-                stats["downloaded_tracks"] = cursor.fetchone()[0]
+                stats["downloaded"] = cursor.fetchone()[0]
                 
                 cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE youtube_url = ?",
+                    (YOUTUBE_MATCH_FAILED,))
+                stats["failed_match"] = cursor.fetchone()[0]
+                
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE youtube_url IS NULL")
+                stats["pending_match"] = cursor.fetchone()[0]
+                
+                stats["pending_download"] = stats["matched"] - stats["downloaded"]
+                
+                # Lyrics statistics
+                cursor = conn.execute(
                     "SELECT COUNT(*) FROM global_tracks WHERE lyrics_text IS NOT NULL")
-                stats["tracks_with_lyrics"] = cursor.fetchone()[0]
+                stats["with_lyrics"] = cursor.fetchone()[0]
+                
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE lyrics_synced = 1")
+                stats["lyrics_synced"] = cursor.fetchone()[0]
+                
+                stats["lyrics_plain"] = stats["with_lyrics"] - stats["lyrics_synced"]
+                
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE lyrics_fetched = 1 AND lyrics_text IS NULL")
+                stats["without_lyrics"] = cursor.fetchone()[0]
+                
+                # LRC files = synced lyrics count
+                stats["lrc_files"] = stats["lyrics_synced"]
+                
+                # LRC hard links = count of playlist links for tracks with synced lyrics
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE g.lyrics_synced = 1
+                """)
+                stats["lrc_hard_links"] = cursor.fetchone()[0]
                 
                 cursor = conn.execute("SELECT COUNT(*) FROM playlist_tracks")
                 stats["playlist_track_links"] = cursor.fetchone()[0]
                 
-                # This shows the efficiency gain: links > unique tracks = deduplication working
+                # Deduplication ratio
                 stats["deduplication_ratio"] = (
-                    round(stats["playlist_track_links"] / stats["total_tracks"], 2)
-                    if stats["total_tracks"] > 0 else 0
+                    round(stats["playlist_track_links"] / stats["total"], 2)
+                    if stats["total"] > 0 else 0
                 )
                 
                 return stats

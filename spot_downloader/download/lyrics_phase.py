@@ -5,20 +5,21 @@ This module provides the orchestration for fetching lyrics for all
 downloaded tracks that don't yet have lyrics.
 
 PHASE 4 Workflow:
-    1. Query database for tracks where downloaded=True and lyrics_fetched=False
-    2. For each track:
+    1. Check for tracks where lyrics fetch previously failed
+       - If found, ask user if they want to retry
+       - If yes, reset lyrics_fetched to allow re-fetch
+    2. Query database for tracks where downloaded=True and lyrics_fetched=False
+    3. For each track:
        a. Attempt to fetch lyrics using LyricsFetcher
        b. If found: store lyrics in database, create .lrc file if synced
-       c. If not found: collect for batch logging (DON'T log during progress)
-       d. Mark lyrics_fetched=True ONLY if lyrics were found
-    3. Create hard links for .lrc files in playlist directories
-    4. Log failures in batch after progress bar completes
+       c. If not found: mark lyrics_fetched=True (won't retry automatically)
+    4. Create hard links for .lrc files in playlist directories
     5. Report statistics
 
 Retry Logic:
-    If all providers fail for a track, the database is NOT updated.
-    This means the track will be retried on the next run of phase 4.
-    Only successful fetches update the database.
+    When lyrics are not found, lyrics_fetched is set to True.
+    This prevents automatic retry on next run.
+    User must explicitly confirm retry when prompted.
 
 Output Files:
     - .lrc files are created in tracks/ directory alongside audio files
@@ -39,6 +40,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import click
 
 from spot_downloader.core.database import Database
 from spot_downloader.core.file_manager import FileManager, sanitize_filename
@@ -324,6 +327,14 @@ def fetch_lyrics_phase4(
     """
     logger.info("PHASE 4: Fetching lyrics")
     
+    # Check if there are tracks where lyrics fetch failed previously
+    failed_count = database.count_failed_lyrics()
+    if failed_count > 0:
+        logger.info(f"Found {failed_count} tracks without lyrics from previous runs")
+        if click.confirm("Do you want to retry fetching lyrics for these tracks?", default=False):
+            reset_count = database.reset_failed_lyrics()
+            logger.info(f"Reset {reset_count} tracks for retry")
+    
     # Get tracks that need lyrics
     tracks = database.get_tracks_needing_lyrics()
     
@@ -428,8 +439,14 @@ def fetch_lyrics_phase4(
                     spotify_url=spotify_url
                 )
         else:
-            # Failure - return info for logging in main loop
+            # Failure - mark as attempted and return info for logging
             rate_limiter.on_failure()
+            
+            # Mark lyrics_fetched=1 so we don't retry automatically
+            try:
+                database.mark_lyrics_not_found(spotify_id)
+            except Exception as e:
+                logger.debug(f"Failed to mark lyrics not found for {track_name}: {e}")
             
             return TrackResult(
                 found=False,
@@ -489,21 +506,6 @@ def fetch_lyrics_phase4(
                 
                 # Update progress bar
                 progress.update(found=result.found, synced=result.is_synced)
-    
-    # Log summary
-    logger.info(
-        f"PHASE 4 complete: {stats.found}/{stats.total} tracks with lyrics "
-        f"({stats.found_rate:.1f}%) - {stats.synced} synced, {stats.plain} plain, "
-        f"{stats.lrc_created} LRC files created"
-    )
-    
-    if stats.lrc_links_created > 0:
-        logger.info(f"Created {stats.lrc_links_created} LRC hard links in playlists")
-    
-    if stats.not_found > 0:
-        logger.info(
-            f"{stats.not_found} tracks without lyrics will be retried on next run"
-        )
     
     return stats
 

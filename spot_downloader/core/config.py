@@ -27,7 +27,8 @@ Example config.yaml:
     download:
       threads:
         matching: 8   # Phase 2: YouTube matching (higher is faster)
-        download: 4   # Phase 3: Audio download (lower avoids rate limiting)
+        download: 1   # Phase 3: Audio download (must be 1 to avoid rate limiting)
+        lyrics: 2     # Phase 4: Lyrics fetching
       cookie_file: null  # Optional: path to cookies.txt for YT Premium
 """
 
@@ -89,8 +90,10 @@ class DownloadConfig:
                          Higher values speed up matching but increase API rate limit risk.
                          Recommended range: 4-8. Default: 8.
         download_threads: Number of parallel threads for downloading (Phase 3).
-                         Lower values recommended to avoid YouTube rate limiting.
-                         Recommended range: 2-4. Default: 4.
+                         Must be 1 to avoid YouTube rate limiting.
+                         Default: 1.
+        lyrics_threads: Number of parallel threads for lyrics fetching (Phase 4).
+                       Recommended range: 1-4. Default: 2.
         cookie_file: Optional path to a cookies.txt file exported from browser.
                      Required for YouTube Music Premium quality (256 kbps).
                      Without cookies, downloads are limited to 128 kbps.
@@ -99,6 +102,7 @@ class DownloadConfig:
     """
     matching_threads: int
     download_threads: int
+    lyrics_threads: int
     cookie_file: Path | None
 
 
@@ -338,7 +342,8 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
     Returns:
         DownloadConfig: Validated download configuration with defaults applied.
                         Default matching_threads: 8
-                        Default download_threads: 4
+                        Default download_threads: 1
+                        Default lyrics_threads: 2
                         Default cookie_file: None
     
     Raises:
@@ -350,15 +355,17 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
         download:
           threads:
             matching: 8
-            download: 4
+            download: 1
+            lyrics: 2
         
-        # Legacy format (uses value for both):
+        # Legacy format (uses value for matching and download only):
         download:
           threads: 4
     """
     # Defaults
     matching_threads = 8
-    download_threads = 4
+    download_threads = 1
+    lyrics_threads = 2
     cookie_file = None
     
     if download_section is not None:
@@ -366,7 +373,7 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
         raw_threads = download_section.get("threads")
         if raw_threads is not None:
             if isinstance(raw_threads, int):
-                # Legacy format: single integer for both
+                # Legacy format: single integer for matching and download
                 if raw_threads < 1:
                     raise ConfigError(
                         "'download.threads' must be a positive integer",
@@ -375,9 +382,10 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
                 matching_threads = raw_threads
                 download_threads = raw_threads
             elif isinstance(raw_threads, dict):
-                # New format: separate values for matching and download
+                # New format: separate values for matching, download, and lyrics
                 raw_matching = raw_threads.get("matching")
                 raw_download = raw_threads.get("download")
+                raw_lyrics = raw_threads.get("lyrics")
                 
                 if raw_matching is not None:
                     if not isinstance(raw_matching, int) or raw_matching < 1:
@@ -394,9 +402,17 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
                             details={"field": "download.threads.download", "value": raw_download}
                         )
                     download_threads = raw_download
+                
+                if raw_lyrics is not None:
+                    if not isinstance(raw_lyrics, int) or raw_lyrics < 1:
+                        raise ConfigError(
+                            "'download.threads.lyrics' must be a positive integer",
+                            details={"field": "download.threads.lyrics", "value": raw_lyrics}
+                        )
+                    lyrics_threads = raw_lyrics
             else:
                 raise ConfigError(
-                    "'download.threads' must be an integer or a dictionary with 'matching' and 'download' keys",
+                    "'download.threads' must be an integer or a dictionary with 'matching', 'download', and 'lyrics' keys",
                     details={"field": "download.threads", "value": raw_threads}
                 )
         
@@ -421,5 +437,6 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
     return DownloadConfig(
         matching_threads=matching_threads,
         download_threads=download_threads,
+        lyrics_threads=lyrics_threads,
         cookie_file=cookie_file
     )
