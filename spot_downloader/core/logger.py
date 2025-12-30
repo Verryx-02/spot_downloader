@@ -7,6 +7,8 @@ This module sets up the logging system with multiple outputs:
     - log_errors.log: Only ERROR and CRITICAL level messages
     - download_failures.log: Failed download track names with Spotify URLs
     - lyrics_failures.log: Tracks where lyrics were not found
+    - embed_failures.log: Tracks where metadata embedding failed
+    - match_close_alternatives.log: Matches with close alternatives for verification
 
 The logging system follows the principle: everything to screen is also saved
 to file, then filtered into specialized files.
@@ -39,13 +41,8 @@ LOG_FULL_FILENAME = "log_full.log"
 LOG_ERRORS_FILENAME = "log_errors.log"
 DOWNLOAD_FAILURES_FILENAME = "download_failures.log"
 LYRICS_FAILURES_FILENAME = "lyrics_failures.log"
+EMBED_FAILURES_FILENAME = "embed_failures.log"
 MATCH_CLOSE_ALTERNATIVES_FILENAME = "match_close_alternatives.log"
-
-# Old names:
-# LOG_FULL_FILENAME = "log_full.txt"
-# LOG_ERRORS_FILENAME = "log_errors.txt"
-# REPORT_FILENAME = "report.txt"
-
 
 
 # Log format for file output (detailed with timestamp)
@@ -109,6 +106,7 @@ class ColoredConsoleFormatter(logging.Formatter):
         message = f"{colored_levelname}: {record.getMessage()}"
         
         return message
+
 
 class RichLoggingHandler(logging.Handler):
     """
@@ -398,7 +396,133 @@ class LyricsFailedTrackHandler(logging.Handler):
                 pass
             self.report_file = None
         super().close()
+
+
+class EmbedFailedTrackHandler(logging.Handler):
+    """
+    Custom handler that captures metadata embedding failures for the embed report file.
     
+    This handler listens for log records that contain embedding failure information
+    and writes them to embed_failures.log in a simple, human-readable format:
+    
+        42-Song Title-Artist Name.m4a
+        https://open.spotify.com/track/xxxxx
+        Error: File not found
+        
+        43-Another Song-Another Artist.m4a
+        https://open.spotify.com/track/yyyyy
+        Error: Cover art download failed
+    
+    The handler looks for specific extra fields in log records:
+        - 'embed_failed_track_name': The name of the track
+        - 'embed_failed_track_artist': The artist name
+        - 'embed_failed_track_url': The Spotify URL
+        - 'embed_failed_error': The error message
+        - 'embed_failed_track_number': The assigned track number (optional)
+    
+    Only records containing these fields are written to the embed report.
+    
+    Attributes:
+        report_path: Path to the embed_failures.log file.
+        report_file: Open file handle (opened lazily on first write).
+    
+    Usage:
+        logger.error(
+            "Embedding failed for track",
+            extra={
+                'embed_failed_track_name': 'Song Title',
+                'embed_failed_track_artist': 'Artist Name',
+                'embed_failed_track_url': 'https://open.spotify.com/track/xxx',
+                'embed_failed_error': 'File not found',
+                'embed_failed_track_number': 42
+            }
+        )
+    """
+    
+    def __init__(self, report_path: Path) -> None:
+        """
+        Initialize the embed failed track handler.
+        
+        Args:
+            report_path: Path to the embed_failures.log file.
+                         File will be created/overwritten.
+        
+        Raises:
+            IOError: If the file cannot be opened for writing.
+        """
+        super().__init__()
+        self.report_path = report_path
+        self.report_file: TextIO | None = None
+    
+    def open(self) -> None:
+        """
+        Open the report file for writing.
+        
+        Called by setup_logging() after handler is created.
+        File is opened in write mode (overwrites existing content).
+        """
+        self.report_file = open(self.report_path, "w", encoding="utf-8")
+    
+    def emit(self, record: logging.LogRecord) -> None:
+        """
+        Write embed failed track info to report if present in the log record.
+        
+        Args:
+            record: The log record to check and potentially write.
+        
+        Behavior:
+            1. Check if record has 'embed_failed_track_name' attribute
+            2. If not present, ignore the record (return immediately)
+            3. If present, extract track info and write to report file
+            4. Format includes filename, URL, and error message
+               If number is None, use "??" as placeholder.
+        
+        Thread Safety:
+            Writes are NOT automatically thread-safe. The file should be
+            protected by a lock if multiple threads may log simultaneously.
+        """
+        # Check if this record has embed failed track info
+        if not hasattr(record, "embed_failed_track_name"):
+            return
+        
+        if self.report_file is None:
+            return
+        
+        try:
+            track_name = getattr(record, "embed_failed_track_name", "Unknown")
+            artist = getattr(record, "embed_failed_track_artist", "Unknown")
+            url = getattr(record, "embed_failed_track_url", "")
+            error = getattr(record, "embed_failed_error", "Unknown error")
+            number = getattr(record, "embed_failed_track_number", None)
+            
+            # Format filename
+            if number is not None:
+                filename = f"{number}-{track_name}-{artist}.m4a"
+            else:
+                filename = f"??-{track_name}-{artist}.m4a"
+            
+            self.report_file.write(f"{filename}\n")
+            self.report_file.write(f"{url}\n")
+            self.report_file.write(f"Error: {error}\n\n")
+            self.report_file.flush()
+        except Exception:
+            self.handleError(record)
+    
+    def close(self) -> None:
+        """
+        Close the report file handle.
+        
+        Called automatically when logging is shut down.
+        Safe to call multiple times.
+        """
+        if self.report_file is not None:
+            try:
+                self.report_file.close()
+            except Exception:
+                pass
+            self.report_file = None
+        super().close()
+
 
 class MatchCloseAlternativesHandler(logging.Handler):
     """
@@ -449,17 +573,11 @@ class MatchCloseAlternativesHandler(logging.Handler):
                 'match_alt_track_number': 42
             }
         )
-    
-    Purpose:
-        When the matching algorithm finds multiple YouTube results with
-        very similar scores (within CLOSE_MATCH_THRESHOLD), it's uncertain
-        which is the correct match. This log file allows users to review
-        these ambiguous cases and use --replace to correct any mistakes.
     """
     
     def __init__(self, report_path: Path) -> None:
         """
-        Initialize the match alternatives handler.
+        Initialize the match close alternatives handler.
         
         Args:
             report_path: Path to the match_close_alternatives.log file.
@@ -483,7 +601,7 @@ class MatchCloseAlternativesHandler(logging.Handler):
     
     def emit(self, record: logging.LogRecord) -> None:
         """
-        Write match alternative info to report if present in the log record.
+        Write match close alternatives info to report if present in the log record.
         
         Args:
             record: The log record to check and potentially write.
@@ -491,14 +609,13 @@ class MatchCloseAlternativesHandler(logging.Handler):
         Behavior:
             1. Check if record has 'match_alt_track_name' attribute
             2. If not present, ignore the record (return immediately)
-            3. If present, extract all match info and write to report file
-            4. Format includes filename, URLs, scores, and alternatives
+            3. If present, extract match info and write to report file
         
         Thread Safety:
             Writes are NOT automatically thread-safe. The file should be
             protected by a lock if multiple threads may log simultaneously.
         """
-        # Check if this record has match alternative info
+        # Check if this record has match alternatives info
         if not hasattr(record, "match_alt_track_name"):
             return
         
@@ -521,7 +638,6 @@ class MatchCloseAlternativesHandler(logging.Handler):
             else:
                 filename = f"??-{track_name}-{artist}.m4a"
             
-            # Write entry
             self.report_file.write(f"{filename}\n")
             self.report_file.write(f"Spotify: {track_name} {spotify_url}\n")
             self.report_file.write(f"Selected: {youtube_title} {youtube_url} (score: {score:.1f})\n")
@@ -647,6 +763,12 @@ def setup_logging(output_dir: Path) -> None:
     lyrics_handler.open()
     root_logger.addHandler(lyrics_handler)
     
+    # Embed failures handler
+    embed_failures_path = logs_dir / "embed_failures.log"
+    embed_handler = EmbedFailedTrackHandler(embed_failures_path)
+    embed_handler.open()
+    root_logger.addHandler(embed_handler)
+    
     # Match close alternatives handler
     match_alt_path = logs_dir / "match_close_alternatives.log"
     match_alt_handler = MatchCloseAlternativesHandler(match_alt_path)
@@ -682,6 +804,7 @@ def get_logger(name: str) -> logging.Logger:
         first during application startup.
     """
     return logging.getLogger(name)
+
 
 def format_matched_message(artist: str, name: str, url: str) -> str:
     """
@@ -859,6 +982,61 @@ def log_lyrics_failure(
             "lyrics_failed_track_artist": artist,
             "lyrics_failed_track_url": spotify_url,
             "lyrics_failed_track_number": assigned_number,
+        }
+    )
+
+
+def log_embed_failure(
+    logger: logging.Logger,
+    track_name: str,
+    artist: str,
+    spotify_url: str,
+    error_message: str,
+    assigned_number: int | None = None
+) -> None:
+    """
+    Log a track whose metadata embedding failed.
+    
+    This is a convenience function that logs an embedding failure with the
+    correct extra fields for the EmbedFailedTrackHandler to pick up.
+    
+    Args:
+        logger: The logger to use for the message.
+        track_name: The name of the track.
+        artist: The artist name.
+        spotify_url: The Spotify URL for the track.
+        error_message: Description of why the embedding failed.
+        assigned_number: Track number for filename display.
+    
+    Behavior:
+        Logs an ERROR level message and attaches extra fields that
+        EmbedFailedTrackHandler will use to write to embed_failures.log.
+    
+    Example:
+        log_embed_failure(
+            logger,
+            track_name="Song Title",
+            artist="Artist Name",
+            spotify_url="https://open.spotify.com/track/xxx",
+            error_message="File not found",
+            assigned_number=42
+        )
+        
+        # This will:
+        # 1. Log "Embedding failed: Song Title - File not found" to console/log_full.log
+        # 2. Write to embed_failures.log:
+        #    "42-Song Title-Artist Name.m4a
+        #     https://open.spotify.com/track/xxx
+        #     Error: File not found"
+    """
+    logger.error(
+        f"Embedding failed: {track_name} - {error_message}",
+        extra={
+            "embed_failed_track_name": track_name,
+            "embed_failed_track_artist": artist,
+            "embed_failed_track_url": spotify_url,
+            "embed_failed_error": error_message,
+            "embed_failed_track_number": assigned_number,
         }
     )
 

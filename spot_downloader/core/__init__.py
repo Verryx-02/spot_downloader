@@ -39,6 +39,7 @@ from spot_downloader.core.exceptions import (
 from spot_downloader.core.logger import (
     get_logger,
     log_download_failure,
+    log_embed_failure,
     log_lyrics_failure,
     setup_logging,
     shutdown_logging,
@@ -73,6 +74,7 @@ __all__ = [
     "setup_logging",
     "get_logger",
     "log_download_failure",
+    "log_embed_failure",
     "log_lyrics_failure",
     "shutdown_logging",
     "MatchingProgressBar",

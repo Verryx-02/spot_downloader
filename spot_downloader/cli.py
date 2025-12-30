@@ -509,15 +509,12 @@ def _run_download(options: dict) -> None:
             )
 
         if options["run_phase5"]:
-            try:
-                _run_phase5(
-                    database=database,
-                    playlist_id=playlist_id,
-                    output_dir=config.output.directory,
-                    num_threads=config.download.download_threads
-                )
-            except NotImplementedError:
-                logger.warning("PHASE 5 not yet implemented - skipping")
+            _run_phase5(
+                database=database,
+                playlist_id=playlist_id,
+                output_dir=config.output.directory,
+                num_threads=config.download.embedding_threads
+            )
         
         # Final statistics
         if options.get("sync_all"):
@@ -1098,11 +1095,13 @@ def _run_phase5(
     Behavior:
         1. Log phase start
         2. Get tracks that are downloaded but don't have metadata_embedded=True
+           OR have lyrics available but not embedded
         3. For each track (parallel with num_threads):
            a. Load file from file_path in database
            b. Embed all Spotify metadata (title, artist, album, cover, etc.)
            c. If lyrics_text exists in database, embed lyrics
            d. Mark metadata_embedded=True and lyrics_embedded=True (if lyrics present)
+           e. Mark cover_embedded=True if cover was successfully embedded
         4. Log embedding statistics
     
     File Naming:
@@ -1112,13 +1111,27 @@ def _run_phase5(
     Database Updates:
         - Sets metadata_embedded=True
         - Sets lyrics_embedded=True if lyrics were embedded
+        - Sets cover_embedded=True if cover art was embedded
     
     Logging:
         - INFO: Phase start, progress, completion
         - DEBUG: Individual track processing
-        - ERROR: Files that couldn't be processed
+        - ERROR: Files that couldn't be processed (also written to embed_failures.log)
     """
-    raise NotImplementedError("Contract only - implementation pending")
+    logger.info("=" * 60)
+    logger.info("PHASE 5: Embedding metadata and lyrics")
+    logger.info("=" * 60)
+    
+    stats = embed_metadata_phase5(
+        database=database,
+        playlist_id=playlist_id,
+        output_dir=output_dir,
+        num_threads=num_threads
+    )
+    
+    logger.info(f"PHASE 5 complete: {stats.embedded}/{stats.total} tracks processed")
+    if stats.failed > 0:
+        logger.warning(f"Failed to embed: {stats.failed} tracks (see embed_failures.log)")
 
 
 def _handle_replace(replace_args: tuple[Path, str], cookie_file: Path | None) -> None:

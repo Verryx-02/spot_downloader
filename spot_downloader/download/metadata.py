@@ -48,8 +48,8 @@ Usage:
 """
 
 from pathlib import Path
-from typing import Any
 
+import requests
 from mutagen.mp4 import MP4, MP4Cover
 
 from spot_downloader.core.exceptions import MetadataError
@@ -130,7 +130,7 @@ class MetadataEmbedder:
         file_path: Path,
         track: Track,
         lyrics: Lyrics | None = None
-    ) -> None:
+    ) -> bool:
         """
         Embed all metadata into an M4A file.
         
@@ -141,6 +141,9 @@ class MetadataEmbedder:
             file_path: Path to the M4A file to update.
             track: Track object containing metadata to embed.
             lyrics: Optional Lyrics object to embed.
+        
+        Returns:
+            bool: True if cover art was successfully embedded, False otherwise.
         
         Raises:
             MetadataError: If file cannot be opened, written, or saved.
@@ -165,13 +168,61 @@ class MetadataEmbedder:
         
         Example:
             embedder = MetadataEmbedder()
-            embedder.embed_metadata(
+            cover_embedded = embedder.embed_metadata(
                 Path("song.m4a"),
                 track,
                 lyrics=Lyrics("lyrics text", is_synced=False, source="genius")
             )
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        # Open file
+        audio = self._open_file(file_path)
+        
+        # Embed basic metadata
+        self._embed_basic_tags(audio, track)
+        
+        # Embed track and disc numbers
+        self._embed_track_disc_numbers(audio, track)
+        
+        # Embed extended tags
+        self._embed_extended_tags(audio, track)
+        
+        # Embed cover art (returns success status)
+        cover_embedded = self._embed_cover_art(audio, track.cover_url)
+        
+        # Embed lyrics
+        self._embed_lyrics(audio, lyrics)
+        
+        # Save file
+        self._save_file(audio, file_path)
+        
+        return cover_embedded
+    
+    def embed_lyrics_only(
+        self,
+        file_path: Path,
+        lyrics: Lyrics
+    ) -> None:
+        """
+        Embed only lyrics into an M4A file (for re-embedding after lyrics fetch).
+        
+        This method is used when a track already has metadata embedded
+        but lyrics were fetched later.
+        
+        Args:
+            file_path: Path to the M4A file to update.
+            lyrics: Lyrics object to embed.
+        
+        Raises:
+            MetadataError: If file cannot be opened, written, or saved.
+        """
+        # Open file
+        audio = self._open_file(file_path)
+        
+        # Embed lyrics
+        self._embed_lyrics(audio, lyrics)
+        
+        # Save file
+        self._save_file(audio, file_path)
     
     def _open_file(self, file_path: Path) -> MP4:
         """
@@ -186,7 +237,20 @@ class MetadataEmbedder:
         Raises:
             MetadataError: If file cannot be opened or is not valid M4A.
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        if not file_path.exists():
+            raise MetadataError(
+                f"File not found: {file_path}",
+                details={"file_path": str(file_path)}
+            )
+        
+        try:
+            audio = MP4(str(file_path))
+            return audio
+        except Exception as e:
+            raise MetadataError(
+                f"Failed to open file: {e}",
+                details={"file_path": str(file_path), "error": str(e)}
+            )
     
     def _embed_basic_tags(self, audio: MP4, track: Track) -> None:
         """
@@ -204,7 +268,39 @@ class MetadataEmbedder:
             - date (\xa9day)
             - genre (\xa9gen) - first genre if multiple
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        # Title
+        if track.name:
+            audio[M4A_TAGS["title"]] = [track.name]
+        
+        # Artist - join all artists with ", "
+        if track.artists:
+            audio[M4A_TAGS["artist"]] = [", ".join(track.artists)]
+        elif track.artist:
+            audio[M4A_TAGS["artist"]] = [track.artist]
+        
+        # Album
+        if track.album:
+            audio[M4A_TAGS["album"]] = [track.album]
+        
+        # Album artist
+        if track.album_artist:
+            audio[M4A_TAGS["album_artist"]] = [track.album_artist]
+        elif track.artist:
+            # Fall back to primary artist if no album artist
+            audio[M4A_TAGS["album_artist"]] = [track.artist]
+        
+        # Date/year
+        if track.release_date:
+            audio[M4A_TAGS["date"]] = [track.release_date]
+        elif track.year:
+            audio[M4A_TAGS["date"]] = [str(track.year)]
+        
+        # Genre - first genre only
+        if track.genres:
+            # Capitalize first letter of genre
+            genre = track.genres[0].title() if track.genres[0] else ""
+            if genre:
+                audio[M4A_TAGS["genre"]] = [genre]
     
     def _embed_track_disc_numbers(self, audio: MP4, track: Track) -> None:
         """
@@ -222,7 +318,15 @@ class MetadataEmbedder:
             M4A uses tuples for track/disc numbers: (number, total)
             This allows players to display "3 of 12".
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        # Track number - format: [(track_number, total_tracks)]
+        if track.track_number:
+            total = track.tracks_count if track.tracks_count else 0
+            audio[M4A_TAGS["track_number"]] = [(track.track_number, total)]
+        
+        # Disc number - format: [(disc_number, total_discs)]
+        if track.disc_number:
+            total = track.disc_count if track.disc_count else 0
+            audio[M4A_TAGS["disc_number"]] = [(track.disc_number, total)]
     
     def _embed_extended_tags(self, audio: MP4, track: Track) -> None:
         """
@@ -239,15 +343,37 @@ class MetadataEmbedder:
             - woas (custom) - Spotify URL
             - isrc (custom) - ISRC code
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        # Copyright
+        if track.copyright_text:
+            audio[M4A_TAGS["copyright"]] = [track.copyright_text]
+        
+        # Publisher (encoded_by tag)
+        if track.publisher:
+            audio[M4A_TAGS["encoded_by"]] = [track.publisher]
+        
+        # Explicit rating: 4 = explicit, 2 = clean
+        # Using tuple format as expected by M4A
+        explicit_value = 4 if track.explicit else 2
+        audio[M4A_TAGS["explicit"]] = [explicit_value]
+        
+        # Spotify URL (custom freeform tag)
+        if track.spotify_url:
+            audio[M4A_TAGS["woas"]] = track.spotify_url.encode("utf-8")
+        
+        # ISRC (custom freeform tag)
+        if track.isrc:
+            audio[M4A_TAGS["isrc"]] = track.isrc.encode("utf-8")
     
-    def _embed_cover_art(self, audio: MP4, cover_url: str | None) -> None:
+    def _embed_cover_art(self, audio: MP4, cover_url: str | None) -> bool:
         """
         Download and embed album cover art.
         
         Args:
             audio: MP4 object to update.
             cover_url: URL to cover image, or None.
+        
+        Returns:
+            bool: True if cover art was successfully embedded, False otherwise.
         
         Behavior:
             1. If cover_url is None, skip silently
@@ -263,7 +389,32 @@ class MetadataEmbedder:
         Image Formats:
             Supports JPEG and PNG. JPEG is preferred for smaller size.
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        if not cover_url:
+            logger.debug("No cover URL provided, skipping cover art")
+            return False
+        
+        # Download cover image
+        cover_data = self._download_cover(cover_url)
+        if cover_data is None:
+            logger.warning(f"Failed to download cover art from {cover_url}")
+            return False
+        
+        # Detect image format
+        image_format = self._detect_image_format(cover_data)
+        
+        # Create MP4Cover and embed
+        try:
+            # Remove existing cover art if present
+            if M4A_TAGS["cover"] in audio:
+                del audio[M4A_TAGS["cover"]]
+            
+            cover = MP4Cover(cover_data, imageformat=image_format)
+            audio[M4A_TAGS["cover"]] = [cover]
+            logger.debug("Cover art embedded successfully")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to embed cover art: {e}")
+            return False
     
     def _embed_lyrics(self, audio: MP4, lyrics: Lyrics | None) -> None:
         """
@@ -288,7 +439,19 @@ class MetadataEmbedder:
             tags, M4A only has one lyrics tag. Synced lyrics are stored
             with their timestamps intact in the text.
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        if lyrics is None:
+            logger.debug("No lyrics provided, skipping lyrics embedding")
+            return
+        
+        if not lyrics.text:
+            logger.debug("Empty lyrics text, skipping lyrics embedding")
+            return
+        
+        try:
+            audio[M4A_TAGS["lyrics"]] = [lyrics.text]
+            logger.debug(f"Lyrics embedded successfully (synced={lyrics.is_synced}, source={lyrics.source})")
+        except Exception as e:
+            logger.warning(f"Failed to embed lyrics: {e}")
     
     def _save_file(self, audio: MP4, file_path: Path) -> None:
         """
@@ -301,7 +464,14 @@ class MetadataEmbedder:
         Raises:
             MetadataError: If save fails (permissions, disk full, etc.)
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        try:
+            audio.save()
+            logger.debug(f"Metadata saved to {file_path}")
+        except Exception as e:
+            raise MetadataError(
+                f"Failed to save file: {e}",
+                details={"file_path": str(file_path), "error": str(e)}
+            )
     
     @staticmethod
     def _download_cover(url: str) -> bytes | None:
@@ -319,7 +489,13 @@ class MetadataEmbedder:
             - Timeout of 10 seconds
             - Returns None on any error (doesn't raise)
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response.content
+        except requests.RequestException as e:
+            logger.debug(f"Cover download failed: {e}")
+            return None
     
     @staticmethod
     def _detect_image_format(data: bytes) -> int:
@@ -336,16 +512,26 @@ class MetadataEmbedder:
         
         Detection:
             - JPEG: Starts with FF D8 FF
-            - PNG: Starts with 89 50 4E 47
+            - PNG: Starts with 89 50 4E 47 (0x89 'P' 'N' 'G')
         """
-        raise NotImplementedError("Contract only - implementation pending")
+        # PNG signature: 89 50 4E 47 0D 0A 1A 0A
+        if data[:8] == b'\x89PNG\r\n\x1a\n':
+            return MP4Cover.FORMAT_PNG
+        
+        # JPEG signature: FF D8 FF
+        if data[:3] == b'\xff\xd8\xff':
+            return MP4Cover.FORMAT_JPEG
+        
+        # Default to JPEG (most common for album art)
+        logger.debug("Could not detect image format, defaulting to JPEG")
+        return MP4Cover.FORMAT_JPEG
 
 
 def embed_track_metadata(
     file_path: Path,
     track: Track,
     lyrics: Lyrics | None = None
-) -> None:
+) -> bool:
     """
     Convenience function to embed metadata without creating embedder instance.
     
@@ -354,11 +540,14 @@ def embed_track_metadata(
         track: Track with metadata.
         lyrics: Optional lyrics.
     
+    Returns:
+        bool: True if cover art was embedded successfully.
+    
     Raises:
         MetadataError: If embedding fails.
     
     Example:
-        embed_track_metadata(Path("song.m4a"), track, lyrics)
+        cover_ok = embed_track_metadata(Path("song.m4a"), track, lyrics)
     """
     embedder = MetadataEmbedder()
-    embedder.embed_metadata(file_path, track, lyrics)
+    return embedder.embed_metadata(file_path, track, lyrics)

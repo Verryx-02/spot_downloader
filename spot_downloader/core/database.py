@@ -37,7 +37,7 @@ from typing import Any, Generator
 from spot_downloader.core.exceptions import DatabaseError
 
 
-DATABASE_VERSION = 2
+DATABASE_VERSION = 3
 LIKED_SONGS_KEY = "__liked_songs__"
 YOUTUBE_MATCH_FAILED = "MATCH_FAILED"
 
@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS global_tracks (
     -- Metadata embedding
     metadata_embedded INTEGER DEFAULT 0,
     lyrics_embedded INTEGER DEFAULT 0,
+    cover_embedded INTEGER DEFAULT 0,
     
     created_at TEXT,
     updated_at TEXT
@@ -196,7 +197,8 @@ class Database:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)", (DATABASE_VERSION,))
             elif row[0] != DATABASE_VERSION:
                 raise DatabaseError(
-                    f"Database version mismatch: expected {DATABASE_VERSION}, got {row[0]}",
+                    f"Database version mismatch: expected {DATABASE_VERSION}, got {row[0]}. "
+                    f"Please delete the database and re-run all phases.",
                     details={"expected": DATABASE_VERSION, "actual": row[0]}
                 )
             conn.commit()
@@ -220,10 +222,12 @@ class Database:
         if "metadata" in row and isinstance(row["metadata"], dict):
             row["metadata"] = json.dumps(row["metadata"])
         
-        for field in ["downloaded", "lyrics_fetched", "lyrics_synced", 
-                      "metadata_embedded", "lyrics_embedded", "explicit"]:
-            if field in row and row[field] is not None:
-                row[field] = 1 if row[field] else 0
+        if "explicit" in row:
+            row["explicit"] = 1 if row["explicit"] else 0
+        
+        # Map copyright_text to copyright (database column name)
+        if "copyright_text" in row:
+            row["copyright"] = row.pop("copyright_text")
         
         return row
     
@@ -239,7 +243,7 @@ class Database:
                     pass
         
         for field in ["downloaded", "lyrics_fetched", "lyrics_synced",
-                      "metadata_embedded", "lyrics_embedded", "explicit"]:
+                      "metadata_embedded", "lyrics_embedded", "cover_embedded", "explicit"]:
             if field in data and data[field] is not None:
                 data[field] = bool(data[field])
         
@@ -288,35 +292,46 @@ class Database:
                     (playlist_id,)
                 )
                 row = cursor.fetchone()
-                return dict(row) if row else None
+                if row:
+                    return {"spotify_url": row[0], "name": row[1], "last_synced": row[2]}
+                return None
     
     def get_all_playlists(self) -> list[dict[str, Any]]:
+        """Get all playlists in the database."""
         with self._lock:
             with self._get_connection() as conn:
                 cursor = conn.execute(
                     "SELECT spotify_id, spotify_url, name, last_synced FROM playlists ORDER BY name"
                 )
-                return [dict(row) for row in cursor.fetchall()]
+                return [
+                    {
+                        "spotify_id": row[0],
+                        "spotify_url": row[1],
+                        "name": row[2],
+                        "last_synced": row[3]
+                    }
+                    for row in cursor.fetchall()
+                ]
     
     def get_active_playlist_id(self) -> str | None:
-        """Get the most recently synced playlist ID."""
+        """Get the most recently synced playlist ID (for phases 3-5 without --url)."""
         with self._lock:
             with self._get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT spotify_id FROM playlists 
-                    WHERE last_synced IS NOT NULL
-                    ORDER BY last_synced DESC LIMIT 1
-                """)
+                cursor = conn.execute(
+                    "SELECT spotify_id FROM playlists ORDER BY last_synced DESC LIMIT 1"
+                )
                 row = cursor.fetchone()
                 return row[0] if row else None
     
     # =========================================================================
-    # Global Track Registry
+    # Global Track Operations
     # =========================================================================
     
     def get_or_create_global_track(self, spotify_id: str, track_data: dict[str, Any]) -> int:
         """
-        Get existing global track or create new one. Returns the database ID.
+        Get existing global track or create new one.
+        
+        Returns the database ID.
         
         If track exists, updates metadata but preserves processing state
         (youtube_url, downloaded, lyrics, etc.).
@@ -550,7 +565,13 @@ class Database:
                 return self._fetch_tracks_with_id(cursor)
     
     def get_tracks_needing_embedding(self) -> list[dict[str, Any]]:
-        """Get all tracks needing metadata or lyrics embedding."""
+        """
+        Get all tracks needing metadata or lyrics embedding.
+        
+        Returns tracks where:
+        - metadata_embedded = 0 (needs full embedding)
+        - OR lyrics_embedded = 0 AND lyrics are available (needs lyrics only)
+        """
         with self._lock:
             with self._get_connection() as conn:
                 cursor = conn.execute("""
@@ -665,13 +686,23 @@ class Database:
                 """, (self._now_iso(), spotify_id))
                 conn.commit()
     
+    def mark_cover_embedded(self, spotify_id: str) -> None:
+        """Mark track as having cover art embedded."""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    UPDATE global_tracks SET cover_embedded = 1, updated_at = ?
+                    WHERE spotify_id = ?
+                """, (self._now_iso(), spotify_id))
+                conn.commit()
+    
     def reset_embedding_flags(self, spotify_id: str) -> None:
         """Reset embedding flags after --replace (track needs re-embedding)."""
         with self._lock:
             with self._get_connection() as conn:
                 conn.execute("""
                     UPDATE global_tracks 
-                    SET metadata_embedded = 0, lyrics_embedded = 0, updated_at = ?
+                    SET metadata_embedded = 0, lyrics_embedded = 0, cover_embedded = 0, updated_at = ?
                     WHERE spotify_id = ?
                 """, (self._now_iso(), spotify_id))
                 conn.commit()
@@ -751,22 +782,33 @@ class Database:
     # =========================================================================
     
     def get_playlist_stats(self, playlist_id: str) -> dict[str, int]:
-        """Get download statistics for a specific playlist."""
+        """Get statistics for a specific playlist."""
         with self._lock:
             with self._get_connection() as conn:
                 db_id = self._get_playlist_db_id(conn, playlist_id)
                 if db_id is None:
-                    return {"total": 0, "matched": 0, "downloaded": 0, 
-                            "failed_match": 0, "pending_match": 0, "pending_download": 0,
-                            "with_lyrics": 0, "lyrics_synced": 0, "lyrics_plain": 0,
-                            "without_lyrics": 0}
+                    return {
+                        "total": 0, "matched": 0, "downloaded": 0,
+                        "failed_match": 0, "pending_match": 0, "pending_download": 0
+                    }
                 
-                stats = {}
+                stats: dict[str, int] = {}
                 
+                # Total tracks in this playlist
                 cursor = conn.execute(
-                    "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?", (db_id,))
+                    "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?", (db_id,)
+                )
                 stats["total"] = cursor.fetchone()[0]
                 
+                # Matched (has youtube_url that isn't MATCH_FAILED)
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE pt.playlist_id = ? AND g.youtube_url IS NOT NULL AND g.youtube_url != ?
+                """, (db_id, YOUTUBE_MATCH_FAILED))
+                stats["matched"] = cursor.fetchone()[0]
+                
+                # Downloaded
                 cursor = conn.execute("""
                     SELECT COUNT(*) FROM global_tracks g
                     JOIN playlist_tracks pt ON g.id = pt.track_id
@@ -774,6 +816,7 @@ class Database:
                 """, (db_id,))
                 stats["downloaded"] = cursor.fetchone()[0]
                 
+                # Failed match
                 cursor = conn.execute("""
                     SELECT COUNT(*) FROM global_tracks g
                     JOIN playlist_tracks pt ON g.id = pt.track_id
@@ -781,6 +824,7 @@ class Database:
                 """, (db_id, YOUTUBE_MATCH_FAILED))
                 stats["failed_match"] = cursor.fetchone()[0]
                 
+                # Pending match (no youtube_url)
                 cursor = conn.execute("""
                     SELECT COUNT(*) FROM global_tracks g
                     JOIN playlist_tracks pt ON g.id = pt.track_id
@@ -788,77 +832,60 @@ class Database:
                 """, (db_id,))
                 stats["pending_match"] = cursor.fetchone()[0]
                 
-                stats["matched"] = stats["total"] - stats["pending_match"] - stats["failed_match"]
-                stats["pending_download"] = stats["matched"] - stats["downloaded"]
-                
-                # Lyrics statistics
+                # Pending download (matched but not downloaded)
                 cursor = conn.execute("""
                     SELECT COUNT(*) FROM global_tracks g
                     JOIN playlist_tracks pt ON g.id = pt.track_id
-                    WHERE pt.playlist_id = ? AND g.lyrics_text IS NOT NULL
-                """, (db_id,))
-                stats["with_lyrics"] = cursor.fetchone()[0]
-                
-                cursor = conn.execute("""
-                    SELECT COUNT(*) FROM global_tracks g
-                    JOIN playlist_tracks pt ON g.id = pt.track_id
-                    WHERE pt.playlist_id = ? AND g.lyrics_synced = 1
-                """, (db_id,))
-                stats["lyrics_synced"] = cursor.fetchone()[0]
-                
-                stats["lyrics_plain"] = stats["with_lyrics"] - stats["lyrics_synced"]
-                
-                cursor = conn.execute("""
-                    SELECT COUNT(*) FROM global_tracks g
-                    JOIN playlist_tracks pt ON g.id = pt.track_id
-                    WHERE pt.playlist_id = ? AND g.lyrics_fetched = 1 AND g.lyrics_text IS NULL
-                """, (db_id,))
-                stats["without_lyrics"] = cursor.fetchone()[0]
-                
-                # LRC files = synced lyrics count (one LRC per track in tracks/)
-                stats["lrc_files"] = stats["lyrics_synced"]
-                
-                # LRC hard links = count of playlist links for tracks with synced lyrics
-                # Each synced track can have multiple hard links (one per playlist it appears in)
-                cursor = conn.execute("""
-                    SELECT COUNT(*) FROM global_tracks g
-                    JOIN playlist_tracks pt ON g.id = pt.track_id
-                    WHERE g.lyrics_synced = 1
-                """)
-                stats["lrc_hard_links"] = cursor.fetchone()[0]
+                    WHERE pt.playlist_id = ? 
+                    AND g.youtube_url IS NOT NULL AND g.youtube_url != ?
+                    AND g.downloaded = 0
+                """, (db_id, YOUTUBE_MATCH_FAILED))
+                stats["pending_download"] = cursor.fetchone()[0]
                 
                 return stats
     
     def get_global_stats(self) -> dict[str, int]:
-        """Get overall database statistics."""
+        """Get global statistics across all playlists."""
         with self._lock:
             with self._get_connection() as conn:
-                stats = {}
+                stats: dict[str, int] = {}
                 
-                cursor = conn.execute("SELECT COUNT(*) FROM playlists")
-                stats["playlists"] = cursor.fetchone()[0]
-                
+                # Total unique tracks
                 cursor = conn.execute("SELECT COUNT(*) FROM global_tracks")
                 stats["total"] = cursor.fetchone()[0]
                 
+                # Total playlists
+                cursor = conn.execute("SELECT COUNT(*) FROM playlists")
+                stats["playlists"] = cursor.fetchone()[0]
+                
+                # Matched
                 cursor = conn.execute(
                     "SELECT COUNT(*) FROM global_tracks WHERE youtube_url IS NOT NULL AND youtube_url != ?",
-                    (YOUTUBE_MATCH_FAILED,))
+                    (YOUTUBE_MATCH_FAILED,)
+                )
                 stats["matched"] = cursor.fetchone()[0]
                 
+                # Downloaded
                 cursor = conn.execute("SELECT COUNT(*) FROM global_tracks WHERE downloaded = 1")
                 stats["downloaded"] = cursor.fetchone()[0]
                 
+                # Failed match
                 cursor = conn.execute(
                     "SELECT COUNT(*) FROM global_tracks WHERE youtube_url = ?",
-                    (YOUTUBE_MATCH_FAILED,))
+                    (YOUTUBE_MATCH_FAILED,)
+                )
                 stats["failed_match"] = cursor.fetchone()[0]
                 
-                cursor = conn.execute(
-                    "SELECT COUNT(*) FROM global_tracks WHERE youtube_url IS NULL")
+                # Pending match
+                cursor = conn.execute("SELECT COUNT(*) FROM global_tracks WHERE youtube_url IS NULL")
                 stats["pending_match"] = cursor.fetchone()[0]
                 
-                stats["pending_download"] = stats["matched"] - stats["downloaded"]
+                # Pending download
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE youtube_url IS NOT NULL AND youtube_url != ? AND downloaded = 0",
+                    (YOUTUBE_MATCH_FAILED,)
+                )
+                stats["pending_download"] = cursor.fetchone()[0]
                 
                 # Lyrics statistics
                 cursor = conn.execute(
@@ -894,6 +921,19 @@ class Database:
                     round(stats["playlist_track_links"] / stats["total"], 2)
                     if stats["total"] > 0 else 0
                 )
+                
+                # Embedding statistics
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE metadata_embedded = 1")
+                stats["metadata_embedded"] = cursor.fetchone()[0]
+                
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE lyrics_embedded = 1")
+                stats["lyrics_embedded"] = cursor.fetchone()[0]
+                
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM global_tracks WHERE cover_embedded = 1")
+                stats["cover_embedded"] = cursor.fetchone()[0]
                 
                 return stats
     

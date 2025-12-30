@@ -430,12 +430,12 @@ class MetadataProgressBar(BaseProgressBar):
     
     Displays:
     - Description (e.g., "Metadata")
-    - Status: ✓ embedded, ✗ failed
+    - Status: ✓ embedded, ✗ failed, ♪ with lyrics
     - Progress bar with spotDL-style colors
     - Percentage
     
     Example:
-        Metadata        ✓ 150  ✗ 2             ━━━━━━━━━━━━━━━━━  76%
+        Metadata        ✓ 150  ✗ 2  ♪ 120      ━━━━━━━━━━━━━━━━━  76%
     """
     
     def __init__(self, total: int, description: str = "Metadata"):
@@ -449,25 +449,31 @@ class MetadataProgressBar(BaseProgressBar):
         super().__init__(total=total, description=description)
         self.embedded = 0
         self.failed = 0
+        self.with_lyrics = 0  # Tracks where lyrics were also embedded
     
     def _get_status_text(self) -> str:
-        """Get status showing embedded/failed counts."""
+        """Get status showing embedded/failed/with_lyrics counts."""
         parts = [
             f"[green]✓ {self.embedded}[/green]",
             f"[red]✗ {self.failed}[/red]",
         ]
+        if self.with_lyrics > 0:
+            parts.append(f"[cyan]♪ {self.with_lyrics}[/cyan]")
         return "  ".join(parts)
     
-    def update(self, success: bool) -> None:
+    def update(self, success: bool, with_lyrics: bool = False) -> None:
         """
         Update the progress bar with a completed metadata embed.
         
         Args:
             success: Whether the metadata was successfully embedded.
+            with_lyrics: Whether lyrics were also embedded.
         """
         self.completed += 1
         if success:
             self.embedded += 1
+            if with_lyrics:
+                self.with_lyrics += 1
         else:
             self.failed += 1
         

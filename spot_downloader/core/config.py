@@ -29,6 +29,7 @@ Example config.yaml:
         matching: 8   # Phase 2: YouTube matching (higher is faster)
         download: 1   # Phase 3: Audio download (must be 1 to avoid rate limiting)
         lyrics: 2     # Phase 4: Lyrics fetching
+        embedding: 4  # Phase 5: Metadata embedding
       cookie_file: null  # Optional: path to cookies.txt for YT Premium
 """
 
@@ -94,6 +95,9 @@ class DownloadConfig:
                          Default: 1.
         lyrics_threads: Number of parallel threads for lyrics fetching (Phase 4).
                        Recommended range: 1-4. Default: 2.
+        embedding_threads: Number of parallel threads for metadata embedding (Phase 5).
+                          Higher values speed up cover art downloads.
+                          Recommended range: 4-8. Default: 4.
         cookie_file: Optional path to a cookies.txt file exported from browser.
                      Required for YouTube Music Premium quality (256 kbps).
                      Without cookies, downloads are limited to 128 kbps.
@@ -103,6 +107,7 @@ class DownloadConfig:
     matching_threads: int
     download_threads: int
     lyrics_threads: int
+    embedding_threads: int
     cookie_file: Path | None
 
 
@@ -124,7 +129,7 @@ class Config:
         config = load_config()
         print(f"Saving to: {config.output.directory}")
         print(f"Export to: {config.output.export_directory}")
-        print(f"Using {config.download.threads} threads")
+        print(f"Using {config.download.embedding_threads} embedding threads")
     """
     spotify: SpotifyConfig
     output: OutputConfig
@@ -344,6 +349,7 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
                         Default matching_threads: 8
                         Default download_threads: 1
                         Default lyrics_threads: 2
+                        Default embedding_threads: 4
                         Default cookie_file: None
     
     Raises:
@@ -357,6 +363,7 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
             matching: 8
             download: 1
             lyrics: 2
+            embedding: 4
         
         # Legacy format (uses value for matching and download only):
         download:
@@ -366,6 +373,7 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
     matching_threads = 8
     download_threads = 1
     lyrics_threads = 2
+    embedding_threads = 4
     cookie_file = None
     
     if download_section is not None:
@@ -382,10 +390,11 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
                 matching_threads = raw_threads
                 download_threads = raw_threads
             elif isinstance(raw_threads, dict):
-                # New format: separate values for matching, download, and lyrics
+                # New format: separate values for matching, download, lyrics, embedding
                 raw_matching = raw_threads.get("matching")
                 raw_download = raw_threads.get("download")
                 raw_lyrics = raw_threads.get("lyrics")
+                raw_embedding = raw_threads.get("embedding")
                 
                 if raw_matching is not None:
                     if not isinstance(raw_matching, int) or raw_matching < 1:
@@ -410,9 +419,17 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
                             details={"field": "download.threads.lyrics", "value": raw_lyrics}
                         )
                     lyrics_threads = raw_lyrics
+                
+                if raw_embedding is not None:
+                    if not isinstance(raw_embedding, int) or raw_embedding < 1:
+                        raise ConfigError(
+                            "'download.threads.embedding' must be a positive integer",
+                            details={"field": "download.threads.embedding", "value": raw_embedding}
+                        )
+                    embedding_threads = raw_embedding
             else:
                 raise ConfigError(
-                    "'download.threads' must be an integer or a dictionary with 'matching', 'download', and 'lyrics' keys",
+                    "'download.threads' must be an integer or a dictionary with 'matching', 'download', 'lyrics', and 'embedding' keys",
                     details={"field": "download.threads", "value": raw_threads}
                 )
         
@@ -438,5 +455,6 @@ def _parse_download_config(download_section: dict[str, Any] | None) -> DownloadC
         matching_threads=matching_threads,
         download_threads=download_threads,
         lyrics_threads=lyrics_threads,
+        embedding_threads=embedding_threads,
         cookie_file=cookie_file
     )

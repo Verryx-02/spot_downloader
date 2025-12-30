@@ -683,12 +683,9 @@ class Downloader:
             "sleep_interval_requests": 0.75,  # 0.75s between HTTP requests
             
             # Sleep between downloads (crucial for avoiding 403/rate limit)
-            # Official yt-dlp "sleep" preset values:
-            # - Guest session limit: ~300 videos/hour (~5/min)
-            # - With cookies: ~2000 videos/hour (~33/min)
             # Random delay between 10-20 seconds before each video download
-            "sleep_interval": 10,       # Minimum seconds before each download
-            "max_sleep_interval": 20,   # Maximum seconds (random between min-max)
+            "sleep_interval": 5,       # Minimum seconds before each download
+            "max_sleep_interval": 15,   # Maximum seconds (random between min-max)
             
             # Enable remote JS challenge solver (requires deno)
             # This is needed for some age-restricted/protected videos

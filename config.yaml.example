@@ -19,7 +19,8 @@ download:
   threads:
     matching: 8   # Phase 2: YouTube matching (can be higher, API is lenient)
     download: 1   # Phase 3: Audio download (lower to avoid rate limiting)
-    lyrics: 2     # Phase 3: Lyrics download 
+    lyrics: 8     # Phase 3: Lyrics download 
+    embedding: 8  # Phase 5: Lyrics and metadata embedding
   
   # Optional: Path to cookies.txt for YouTube Music Premium quality (256 kbps)
   # Export cookies from music.youtube.com using browser extension "Get cookies.txt"
