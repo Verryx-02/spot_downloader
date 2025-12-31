@@ -490,16 +490,14 @@ def _run_download(options: dict) -> None:
                 sys.exit(1)
         
         if options["run_phase3"]:
-            try:
-                _run_phase3(
-                    database=database,
-                    playlist_id=playlist_id,
-                    output_dir=config.output.directory,
-                    cookie_file=cookie_file,
-                    num_threads=config.download.download_threads
-                )
-            except NotImplementedError:
-                logger.warning("PHASE 3 not yet implemented - skipping")
+             _run_phase3(
+                database=database,
+                playlist_id=playlist_id,
+                output_dir=config.output.directory,
+                cookie_file=cookie_file,
+                num_threads=config.download.download_threads
+            )
+
         
         if options["run_phase4"]:
             lyrics_stats = _run_phase4(
