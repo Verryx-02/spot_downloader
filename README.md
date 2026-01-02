@@ -17,14 +17,13 @@ The result is a collection of properly tagged M4A files ready for any music play
 
 - Download entire Spotify playlists or Liked Songs
 - **Sync mode**: download new tracks and detect playlist changes
-- **Export**: generate M3U playlists or folder copies for portability
+- **Export**: generate M3U playlists or folder copies for portability (includes LRC lyrics files)
 - M4A audio (128 kbps free, 256 kbps with YouTube Premium)
 - Full metadata embedding (title, artist, album, cover art, lyrics, etc.)
 - Automatic lyrics fetching from multiple providers
 - Multi-threaded matching and downloads (configurable separately)
 - Hard link architecture: shared tracks stored once, linked to multiple playlists
 - Resume interrupted downloads
-- Detailed logging and error reporting
 
 ## Requirements
 
@@ -44,29 +43,16 @@ pip install -e .
 
 ## Configuration
 
-Create a `config.yaml` file in your working directory:
-
-```yaml
-spotify:
-  client_id: "your_spotify_client_id"
-  client_secret: "your_spotify_client_secret"
-
-output:
-  directory: "~/Desktop/Music/SpotDownloader"
-  export_directory: "~/Desktop/Music/SpotDownloader/Exported"  # Optional
-
-download:
-  threads:
-    matching: 8   # Phase 2: YouTube matching (can be higher)
-    download: 4   # Phase 3: Audio download (lower to avoid rate limiting)
-  cookie_file: null  # Optional: path to cookies.txt
-```
+Rename the `config.yaml.example` file in `config.yaml`.
 
 ### Spotify Credentials
 
 1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 2. Create a new application
-3. Copy the Client ID and Client Secret to your `config.yaml`
+3. Choose an app name and description. (you can invent them)
+4. Set the Website to `http://localhost` and the Redirect URIs to `http://127.0.0.1:8888/callback`
+5. Copy the Client ID and Client Secret to your `config.yaml` file
+6. Do NOT share or post these IDs with anyone, EVER.
 
 ### YouTube Cookies (Recommended)
 
@@ -83,8 +69,6 @@ To set up cookies:
 2. Log in to [YouTube Music](https://music.youtube.com)
 3. Export cookies to a file
 4. Set `cookie_file` in `config.yaml` to the path of your cookies file
-
-> **Warning**: Using cookies may increase rate limiting from YouTube. If you experience many failures, try running without cookies first, then use cookies only for the remaining tracks.
 
 ## Usage
 
@@ -123,19 +107,21 @@ Export your downloaded music for use on other devices:
 
 ```bash
 # Export all playlists as M3U files
-spot --export
+spot --export-all
 
 # Export a specific playlist
 spot --export "My Playlist"
 
 # Export as folder copies (actual files, not links)
-spot --export --copy-files
+spot --export-all --copy-files
 spot --export "My Playlist" --copy-files
 ```
 
+LRC lyrics files are automatically included in the export if available.
+
 ### Run Phases Separately
 
-You can run each phase independently:
+You can run each phase independently if you want:
 
 ```bash
 # PHASE 1: Fetch Spotify metadata
@@ -158,11 +144,15 @@ spot --5
 
 ### Replace Audio in Existing File
 
-Replace the audio of a downloaded track while preserving metadata:
+Sometimes the matching algorithm may match the Spotify song with the wrong YouTube song.
+This is a problem with any matching algorithm. (You can see a formal explanation [here](https://github.com/Verryx-02/spot_downloader/issues/11))
+If you notice that the audio track isn't the same as the one you can listen to on Spotify, you can replace it using the `--replace` function.
+Find the link to the song you want on Spotify and run the command:
 
 ```bash
-spot --replace ~/Music/01-Song-Artist.m4a "https://youtube.com/watch?v=..."
+spot --replace <path of the song to replace> <youtube_link of the correct song>
 ```
+
 
 ## CLI Reference
 
@@ -178,7 +168,8 @@ Sync Options:
   --no-liked                    Skip Liked Songs in sync mode
 
 Export Options:
-  --export [playlist-name]      Export playlists as M3U (all if no name)
+  --export-all                  Export all playlists as M3U
+  --export <playlist-name>      Export specific playlist as M3U
   --copy-files                  Export as folder copies instead of M3U
 
 Phase Selection:
@@ -198,41 +189,22 @@ Info:
   --help                        Show this message and exit
 ```
 
-## Output Structure
-
-```
-output_directory/
-├── spot_downloader.db          # SQLite database
-├── logs/                       # Log files
-│   ├── log_full.log
-│   ├── log_errors.log
-│   ├── download_failures.log
-│   ├── lyrics_failures.log
-│   └── match_close_alternatives.log
-├── tracks/                     # Master audio files (canonical)
-│   ├── Bohemian Rhapsody-Queen.m4a
-│   └── ...
-└── Playlists/                  # Playlist directories (hard links)
-    ├── My Playlist/
-    │   ├── 00001-Bohemian Rhapsody-Queen.m4a  → ../../tracks/...
-    │   └── ...
-    └── Another Playlist/
-        └── ...
-```
-
 ### Hard Link Architecture
 
 - Audio files are stored **once** in `tracks/`
 - Playlist directories contain **hard links** to the master files
 - If a song appears in 10 playlists, it uses disk space only once
 - Deleting a playlist link doesn't delete the master file
+- LRC lyrics files follow the same architecture
 
 ### File Naming
 
 | Location | Format |
 |----------|--------|
 | `tracks/` | `{title}-{artist}.m4a` |
+| `tracks/` | `{title}-{artist}.lrc` (if synced lyrics available) |
 | `Playlists/` | `{position:05d}-{title}-{artist}.m4a` |
+| `Playlists/` | `{position:05d}-{title}-{artist}.lrc` (if synced lyrics available) |
 
 Position uses 5-digit padding (00001-99999) to support Spotify's maximum of 10,000 tracks per playlist.
 
@@ -253,7 +225,7 @@ Position uses 5-digit padding (00001-99999) to support Spotify's maximum of 10,0
 This error occurs when YouTube requires JavaScript to unlock video formats:
 
 1. **Install Deno**
-2. Re-run the download
+2. Re-run the song download
 
 ### "Sign in to confirm your age"
 
@@ -268,13 +240,7 @@ This video is age-restricted:
 YouTube is temporarily blocking requests:
 
 1. Wait 10-30 minutes before retrying
-2. Reduce download threads in `config.yaml`:
-   ```yaml
-   download:
-     threads:
-       download: 2  # Lower = less aggressive
-   ```
-3. Try running without cookies (sometimes causes more rate limiting)
+2. Try running without cookies (you will have low audio quality)
 
 ### "Spotify authentication failed"
 
@@ -342,7 +308,7 @@ The following metadata is embedded in each M4A file:
 | Artist | Spotify |
 | Album | Spotify |
 | Album Artist | Spotify |
-| Year | Spotify |
+| Release Date | Spotify |
 | Genre | Spotify (from artist) |
 | Track Number | Spotify |
 | Disc Number | Spotify |
@@ -350,7 +316,9 @@ The following metadata is embedded in each M4A file:
 | Lyrics | Genius, AZLyrics, MusixMatch, Synced |
 | Explicit | Spotify |
 | Copyright | Spotify |
+| Publisher | Spotify |
 | ISRC | Spotify |
+| Spotify URL | Spotify (custom tag) |
 
 ## Dependencies
 

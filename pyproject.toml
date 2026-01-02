@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spot-downloader"
-version = "0.4.0"
+version = "1.0.0"
 description = "Download Spotify playlists via YouTube Music in M4A format"
 readme = "README.md"
 license = {text = "MIT"}
