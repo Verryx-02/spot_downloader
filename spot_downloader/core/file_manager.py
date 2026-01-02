@@ -9,6 +9,7 @@ Architecture:
     ├── spot_downloader.db
     ├── tracks/                               # Central storage (canonical files)
     │   ├── Bohemian Rhapsody-Queen.m4a
+    │   ├── Bohemian Rhapsody-Queen.lrc       # LRC file (if synced lyrics)
     │   ├── Hey Jude-The Beatles.m4a
     │   └── Back In Black-AC_DC.m4a
     ├── logs/
@@ -16,6 +17,7 @@ Architecture:
     └── Playlists/                            # Playlist views container
         ├── My Playlist/                      # Playlist view (hard links)
         │   ├── 00001-Bohemian Rhapsody-Queen.m4a → ../../tracks/Bohemian Rhapsody-Queen.m4a
+        │   ├── 00001-Bohemian Rhapsody-Queen.lrc → ../../tracks/Bohemian Rhapsody-Queen.lrc
         │   ├── 00002-Hey Jude-The Beatles.m4a    → ../../tracks/Hey Jude-The Beatles.m4a
         │   └── 00003-Back In Black-AC_DC.m4a     → ../../tracks/Back In Black-AC_DC.m4a
         └── Another Playlist/
@@ -48,6 +50,7 @@ Usage:
 
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -222,6 +225,7 @@ class FileManager:
             - Tries hard link first (same filesystem)
             - Falls back to symlink (cross-filesystem)
             - Removes existing link if present
+            - Also creates LRC link if LRC file exists
         
         Raises:
             FileNotFoundError: If canonical_path doesn't exist.
@@ -241,58 +245,27 @@ class FileManager:
             # Try hard link first
             os.link(canonical_path, link_path)
         except OSError:
-            # Fallback to symlink (cross-filesystem or other issues)
-            # Use relative path for symlink
-            rel_path = os.path.relpath(canonical_path, playlist_dir)
-            link_path.symlink_to(rel_path)
+            # Fall back to symlink (cross-filesystem)
+            link_path.symlink_to(canonical_path.resolve())
+        
+        # Also create LRC link if LRC file exists
+        lrc_canonical = canonical_path.with_suffix(".lrc")
+        if lrc_canonical.exists():
+            lrc_link_path = link_path.with_suffix(".lrc")
+            
+            # Remove existing LRC link if present
+            if lrc_link_path.exists() or lrc_link_path.is_symlink():
+                lrc_link_path.unlink()
+            
+            try:
+                os.link(lrc_canonical, lrc_link_path)
+            except OSError:
+                try:
+                    lrc_link_path.symlink_to(lrc_canonical.resolve())
+                except OSError:
+                    pass  # LRC link failure is not critical
         
         return link_path
-    
-    def update_all_playlist_links(
-        self,
-        canonical_path: Path,
-        title: str,
-        artist: str,
-        playlists: list[dict]
-    ) -> list[Path]:
-        """
-        Create/update links in ALL playlists containing a track.
-        
-        Called after download or --replace.
-        
-        Args:
-            canonical_path: Path to canonical file in tracks/.
-            title: Track title.
-            artist: Artist name.
-            playlists: List of dicts with 'name' and 'position' keys.
-                      (From Database.get_playlists_containing_track)
-        
-        Returns:
-            List of created link paths.
-        
-        Example:
-            playlists = db.get_playlists_containing_track(spotify_id)
-            links = fm.update_all_playlist_links(
-                canonical_path, title, artist, playlists
-            )
-        """
-        links = []
-        
-        for playlist in playlists:
-            try:
-                link = self.create_playlist_link(
-                    canonical_path=canonical_path,
-                    playlist_name=playlist["name"],
-                    position=playlist["position"],
-                    title=title,
-                    artist=artist
-                )
-                links.append(link)
-            except Exception:
-                # Log error but continue with other playlists
-                pass
-        
-        return links
     
     def update_playlist_links_from_db(
         self,
@@ -301,64 +274,90 @@ class FileManager:
         canonical_path: Path,
         title: str,
         artist: str
-    ) -> list[Path]:
+    ) -> int:
         """
-        Create/update links in ALL playlists containing a track.
+        Create/update hard links in all playlists containing a track.
         
-        Convenience method that queries the database.
+        This is called after downloading a track to ensure it appears
+        in all playlist directories that reference it.
         
         Args:
-            database: Database instance.
+            database: Database instance for querying playlists.
             spotify_id: Spotify track ID.
-            canonical_path: Path to canonical file in tracks/.
+            canonical_path: Path to file in tracks/.
             title: Track title.
             artist: Artist name.
         
         Returns:
-            List of created link paths.
+            Number of links successfully created.
         """
         playlists = database.get_playlists_containing_track(spotify_id)
-        return self.update_all_playlist_links(canonical_path, title, artist, playlists)
-    
-    def cleanup_playlist_orphans(
-        self,
-        playlist_name: str,
-        valid_positions: set[int]
-    ) -> int:
-        """
-        Remove links in playlist that no longer correspond to tracks.
+        created = 0
         
-        Called during sync to remove tracks that were removed from
+        for playlist in playlists:
+            playlist_spotify_id = playlist["playlist_spotify_id"]
+            position = playlist["position"]
+            playlist_name = playlist["name"]
+            
+            # Map LIKED_SONGS_KEY to "Liked Songs" for directory name
+            if playlist_spotify_id == "__liked_songs__":
+                playlist_name = "Liked Songs"
+            
+            try:
+                self.create_playlist_link(
+                    canonical_path=canonical_path,
+                    playlist_name=playlist_name,
+                    position=position,
+                    title=title,
+                    artist=artist
+                )
+                created += 1
+            except Exception:
+                pass
+        
+        return created
+    
+    def remove_orphaned_links(self, playlist_name: str, valid_positions: set[int]) -> int:
+        """
+        Remove playlist links that are no longer in the playlist.
+        
+        Called during sync to remove tracks that were deleted from
         the Spotify playlist.
         
         Args:
             playlist_name: Playlist name.
-            valid_positions: Set of valid position numbers.
+            valid_positions: Set of positions that should exist.
         
         Returns:
             Number of orphaned links removed.
         """
-        playlist_dir = self.get_playlist_dir(playlist_name)
-        removed = 0
+        safe_name = sanitize_filename(playlist_name)
+        playlist_dir = self.playlists_dir / safe_name
         
-        for file in playlist_dir.iterdir():
-            if not (file.is_file() or file.is_symlink()):
+        if not playlist_dir.exists():
+            return 0
+        
+        removed = 0
+        for link in playlist_dir.iterdir():
+            if not link.name.endswith(".m4a"):
                 continue
             
-            if not file.suffix.lower() == ".m4a":
-                continue
-            
+            # Extract position from filename (first 5 digits)
             try:
-                # Extract position from filename (first 5 chars)
-                pos_str = file.name.split("-")[0]
-                pos = int(pos_str)
-                
-                if pos not in valid_positions:
-                    file.unlink()
+                position = int(link.name[:5])
+            except ValueError:
+                continue
+            
+            if position not in valid_positions:
+                try:
+                    link.unlink()
+                    # Also remove LRC if exists
+                    lrc_path = link.with_suffix(".lrc")
+                    if lrc_path.exists():
+                        lrc_path.unlink()
                     removed += 1
-            except (ValueError, IndexError):
-                # Filename doesn't match expected pattern, skip
-                pass
+                except OSError:
+                    pass
         
         return removed
     
@@ -395,8 +394,6 @@ class FileManager:
         Returns:
             True if directory existed and was deleted, False otherwise.
         """
-        import shutil
-        
         safe_name = sanitize_filename(playlist_name)
         playlist_dir = self.playlists_dir / safe_name
         
@@ -512,6 +509,7 @@ class FileManager:
         Export playlist as folder with actual file copies.
         
         Creates a playlist folder with numbered copies of the audio files.
+        Also copies any .lrc files that exist alongside the audio files.
         
         Args:
             playlist_name: Human-readable playlist name.
@@ -519,10 +517,8 @@ class FileManager:
             export_dir: Base export directory.
         
         Returns:
-            Tuple of (playlist_folder_path, number_of_files_copied).
+            Tuple of (playlist_folder_path, number_of_audio_files_copied).
         """
-        import shutil
-        
         safe_name = sanitize_filename(playlist_name)
         playlist_folder = export_dir / safe_name
         playlist_folder.mkdir(parents=True, exist_ok=True)
@@ -544,6 +540,16 @@ class FileManager:
             try:
                 shutil.copy2(src_path, dest_path)
                 copied += 1
+                
+                # Copy LRC file if exists
+                lrc_src = src_path.with_suffix(".lrc")
+                if lrc_src.exists():
+                    lrc_dest = dest_path.with_suffix(".lrc")
+                    try:
+                        shutil.copy2(lrc_src, lrc_dest)
+                    except Exception:
+                        pass  # LRC copy failure is not critical
+                        
             except Exception:
                 pass
         
@@ -556,9 +562,10 @@ class FileManager:
         tracks_subdir: str = "tracks"
     ) -> int:
         """
-        Copy master audio files to export directory.
+        Copy master audio files and LRC files to export directory.
         
         Used for M3U export to create the tracks/ folder with actual files.
+        Also copies any .lrc files that exist alongside the audio files.
         
         Args:
             tracks: List of dicts with file_path key.
@@ -566,10 +573,8 @@ class FileManager:
             tracks_subdir: Subdirectory name for tracks (default: "tracks").
         
         Returns:
-            Number of files successfully copied.
+            Number of audio files successfully copied.
         """
-        import shutil
-        
         tracks_folder = export_dir / tracks_subdir
         tracks_folder.mkdir(parents=True, exist_ok=True)
         
@@ -588,15 +593,23 @@ class FileManager:
             
             dest_path = tracks_folder / src_path.name
             
-            # Skip if already exists (from previous export)
-            if dest_path.exists():
-                copied += 1
-                continue
+            # Copy audio file if not already exists
+            if not dest_path.exists():
+                try:
+                    shutil.copy2(src_path, dest_path)
+                except Exception:
+                    continue
             
-            try:
-                shutil.copy2(src_path, dest_path)
-                copied += 1
-            except Exception:
-                pass
+            copied += 1
+            
+            # Copy LRC file if exists
+            lrc_src = src_path.with_suffix(".lrc")
+            if lrc_src.exists():
+                lrc_dest = dest_path.with_suffix(".lrc")
+                if not lrc_dest.exists():
+                    try:
+                        shutil.copy2(lrc_src, lrc_dest)
+                    except Exception:
+                        pass  # LRC copy failure is not critical
         
         return copied

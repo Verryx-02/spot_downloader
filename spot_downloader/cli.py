@@ -89,7 +89,7 @@ click.rich_click.OPTION_GROUPS = {
         },
         {
             "name": "Export Options",
-            "options": ["--export", "--copy-files"],
+            "options": ["--export-all", "--export", "--copy-files"],
         },
         {
             "name": "Phase Selection",
@@ -194,13 +194,16 @@ __version__ = "0.4.0"
     help="PHASE 5: Embed metadata and lyrics"
 )
 @click.option(
+    "--export-all",
+    is_flag=True,
+    help="Export all playlists as M3U"
+)
+@click.option(
     "--export",
     type=str,
     default=None,
-    is_flag=False,
-    flag_value="__ALL__",
-    metavar="[playlist-name]",
-    help="Export playlists as M3U (all if no name given)"
+    metavar="<playlist-name>",
+    help="Export specific playlist as M3U"
 )
 @click.option(
     "--copy-files",
@@ -244,6 +247,7 @@ def cli(
     phase3_only: bool,
     phase4_only: bool,
     phase5_only: bool,
+    export_all: bool,
     export: Optional[str],
     copy_files: bool,
     replace: Optional[tuple[Path, str]],
@@ -273,9 +277,9 @@ def cli(
     
     \b
     EXPORT:
-        spot --export                          # Export all playlists as M3U
-        spot --export "My Playlist"            # Export single playlist as M3U
-        spot --export --copy-files             # Export all as folder copies
+        spot --export-all                         # Export all playlists as M3U
+        spot --export "My Playlist"               # Export single playlist as M3U
+        spot --export-all --copy-files            # Export all as folder copies
         spot --export "My Playlist" --copy-files  # Export single as folder copy
     
     \b
@@ -296,9 +300,10 @@ def cli(
         click.echo(f"spot-downloader {__version__}")
         ctx.exit(0)
     
-    # Handle --export (standalone operation)
-    if export is not None:
-        _handle_export(export, copy_files)
+    # Handle --export-all or --export (standalone operations)
+    if export_all or export:
+        export_arg = export if export else "__ALL__"
+        _handle_export(export_arg, copy_files)
         ctx.exit(0)
     
     # Handle --replace (standalone operation)
@@ -306,9 +311,10 @@ def cli(
         _handle_replace(replace, cookie_file)
         ctx.exit(0)
     
-    # --copy-files only makes sense with --export
-    if copy_files:
-        raise click.UsageError("--copy-files can only be used with --export")
+    # --copy-files only makes sense with --export-all or --export
+    if copy_files and not export_all and not export:
+        raise click.UsageError("--copy-files can only be used with --export-all or --export")
+
     
     # Phase flags
     phase_flags = [phase1_only, phase2_only, phase3_only, phase4_only, phase5_only]
