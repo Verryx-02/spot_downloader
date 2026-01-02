@@ -210,7 +210,7 @@ __version__ = "0.4.0"
 @click.option(
     "--replace",
     nargs=2,
-    type=(click.Path(exists=True, path_type=Path), str),
+    type=(click.Path(path_type=Path), str),
     default=None,
     metavar="<file.m4a> <youtube-url>",
     help="Replace audio in existing M4A file"
@@ -1162,6 +1162,16 @@ def _handle_replace(replace_args: tuple[Path, str], cookie_file: Path | None) ->
         on the next Phase 5 run.
     """
     m4a_path, youtube_url = replace_args
+    
+    # Normalize path: handle shell-escaped spaces (macOS/Linux: "\ " → " ")
+    # Also expand ~ and resolve to absolute path
+    path_str = str(m4a_path).replace('\\ ', ' ')
+    m4a_path = Path(path_str).expanduser().resolve()
+    
+    # Verify file exists after normalization
+    if not m4a_path.exists():
+        click.echo(f"Error: File not found: {m4a_path}", err=True)
+        sys.exit(1)
     
     try:
         # Load configuration
