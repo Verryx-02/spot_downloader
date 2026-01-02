@@ -512,6 +512,62 @@ class Database:
                 """, (spotify_id,))
                 return [dict(row) for row in cursor.fetchall()]
     
+    # =========================================================================
+    # Track Lookup for --replace
+    # =========================================================================
+    
+    def get_track_by_playlist_position(
+        self,
+        playlist_name: str,
+        position: int
+    ) -> dict[str, Any] | None:
+        """
+        Get a track by its playlist name and position.
+        
+        This method is used by --replace to find a track when the user
+        provides a path like: ~/Music/Playlists/Liked Songs/00005-Song-Artist.m4a
+        
+        Args:
+            playlist_name: Name of the playlist (from directory name).
+                          For Liked Songs, pass LIKED_SONGS_KEY ("__liked_songs__").
+            position: Track position in the playlist (1-indexed).
+        
+        Returns:
+            Track data dictionary if found, None otherwise.
+            Includes: spotify_id, name, artist, youtube_url, file_path, etc.
+        
+        Note:
+            The lookup uses playlist name (not spotify_id) because that's
+            what we can extract from the filesystem path. For regular playlists,
+            we match by p.name. For liked songs, we match by p.spotify_id.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                # For LIKED_SONGS_KEY, match by spotify_id
+                # For regular playlists, match by name
+                if playlist_name == LIKED_SONGS_KEY:
+                    cursor = conn.execute("""
+                        SELECT g.* FROM global_tracks g
+                        JOIN playlist_tracks pt ON g.id = pt.track_id
+                        JOIN playlists p ON pt.playlist_id = p.id
+                        WHERE p.spotify_id = ? AND pt.position = ?
+                    """, (LIKED_SONGS_KEY, position))
+                else:
+                    cursor = conn.execute("""
+                        SELECT g.* FROM global_tracks g
+                        JOIN playlist_tracks pt ON g.id = pt.track_id
+                        JOIN playlists p ON pt.playlist_id = p.id
+                        WHERE p.name = ? AND pt.position = ?
+                    """, (playlist_name, position))
+                
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                
+                track = self._deserialize_track_row(row)
+                track["track_id"] = row["spotify_id"]
+                return track
+    
     def get_max_position(self, playlist_id: str) -> int:
         """Get the highest position number in a playlist."""
         with self._lock:

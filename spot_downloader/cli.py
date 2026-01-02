@@ -111,6 +111,8 @@ from spot_downloader.core import (
     ConfigError,
     Database,
     DatabaseError,
+    DownloadError,
+    MetadataError,
     FileManager,
     SpotDownloaderError,
     SpotifyError,
@@ -1144,21 +1146,116 @@ def _handle_replace(replace_args: tuple[Path, str], cookie_file: Path | None) ->
         cookie_file: Optional path to cookies.txt for Premium quality.
     
     Behavior:
-        1. Load configuration (for cookie_file fallback)
-        2. Validate the M4A file exists and is readable
-        3. Extract existing metadata from the M4A file
-        4. Download audio from YouTube URL
-        5. Re-embed the preserved metadata into the new audio
-        6. Replace the original file
+        1. Load configuration (for cookie_file fallback and database path)
+        2. Initialize database
+        3. Parse the file path to get (playlist_name, position)
+        4. Look up track in database
+        5. Show confirmation prompt with track details
+        6. If confirmed, replace the audio and update database
     
     Raises:
         SystemExit: On any error (file not found, download failed, etc.)
     
     Note:
-        This operation is completely independent from the database.
-        It works on any M4A file produced by this application.
+        This operation updates the database with the new YouTube URL
+        and resets embedding flags so the track will be re-embedded
+        on the next Phase 5 run.
     """
-    raise NotImplementedError("Contract only - implementation pending")
+    m4a_path, youtube_url = replace_args
+    
+    try:
+        # Load configuration
+        config = load_config()
+        
+        # Setup logging (minimal, just for errors)
+        setup_logging(config.output.directory)
+        
+        # Resolve cookie file (CLI argument takes precedence)
+        effective_cookie_file = cookie_file or config.download.cookie_file
+        
+        # Initialize database
+        db_path = config.output.directory / "database.db"
+        if not db_path.exists():
+            click.echo("Error: No database found. Run a download first.", err=True)
+            sys.exit(1)
+        
+        database = Database(db_path)
+        
+        # Parse the file path to get playlist name and position
+        try:
+            from spot_downloader.utils.replace import parse_playlist_path
+            playlist_name, position = parse_playlist_path(m4a_path)
+        except ValueError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        
+        # Look up track in database
+        track = database.get_track_by_playlist_position(playlist_name, position)
+        
+        if track is None:
+            # Provide helpful error message
+            display_name = "Liked Songs" if playlist_name == LIKED_SONGS_KEY else playlist_name
+            click.echo(
+                f"Error: Track not found in database.\n"
+                f"  Playlist: {display_name}\n"
+                f"  Position: {position}\n"
+                f"Make sure the file path is correct and the track has been downloaded.",
+                err=True
+            )
+            sys.exit(1)
+        
+        # Extract track info for display
+        track_name = track.get("name", "Unknown")
+        artist = track.get("artist", "Unknown")
+        old_youtube_url = track.get("youtube_url", "Unknown")
+        
+        # Show confirmation prompt
+        click.echo("")
+        click.echo(f"Replacing: \"{track_name}\" by {artist}")
+        click.echo(f"From: {old_youtube_url}")
+        click.echo(f"To:   {youtube_url}")
+        click.echo("")
+        
+        if not click.confirm("Proceed?", default=False):
+            click.echo("Aborted.")
+            sys.exit(0)
+        
+        click.echo("")
+        click.echo("Downloading and replacing...")
+        
+        # Perform the replacement
+        from spot_downloader.utils.replace import replace_track_audio
+        
+        result = replace_track_audio(
+            m4a_path=m4a_path,
+            youtube_url=youtube_url,
+            database=database,
+            cookie_file=effective_cookie_file
+        )
+        
+        click.echo("")
+        click.echo(click.style("✓ ", fg="green") + f"Successfully replaced: \"{result['track_name']}\" by {result['artist']}")
+        click.echo(f"  File: {result['canonical_path']}")
+        click.echo("")
+        click.echo("Note: Run Phase 5 (--5) to re-embed metadata if needed.")
+        
+    except ConfigError as e:
+        click.echo(f"Configuration error: {e.message}", err=True)
+        sys.exit(1)
+    except DatabaseError as e:
+        click.echo(f"Database error: {e.message}", err=True)
+        sys.exit(2)
+    except MetadataError as e:
+        click.echo(f"Metadata error: {e.message}", err=True)
+        sys.exit(3)
+    except DownloadError as e:
+        click.echo(f"Download error: {e.message}", err=True)
+        sys.exit(4)
+    except Exception as e:
+        click.echo(f"Unexpected error: {e}", err=True)
+        sys.exit(1)
+    finally:
+        shutdown_logging()
 
 
 def _handle_export(export_arg: str, copy_files: bool) -> None:
