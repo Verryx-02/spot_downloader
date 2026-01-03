@@ -33,10 +33,50 @@ The result is a collection of properly tagged M4A files ready for any music play
 - Deno (required for some protected videos)
 - Optional: YouTube Music cookies for Premium quality and age-restricted content
 
+## Platform Compatibility
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **macOS** | Partially tested | Edge cases not tested |
+| **Linux** | Not tested | Tests coming soon |
+| **Windows** | Not tested | Tests coming soon |
+| **Docker** | In development | Cross-platform solution coming soon |
+
+### Windows-Specific Considerations
+
+**Hard Links & Symlinks:**  
+The application uses hard links to prevent file duplication across playlists. On Windows, this may require running Command Prompt or PowerShell as **Administrator**.
+
+
+**Alternative:** If you encounter permission errors, the application automatically falls back to symbolic links. If both fail, please report the issue.
+
+**FFmpeg:** Windows users must install FFmpeg manually and add it to PATH ([installation guide](https://windowsloop.com/install-ffmpeg-windows-10/)).
+
+### Help Us Test!
+
+This project was primarily developed and tested on macOS. If you encounter issues on Linux or Windows, please:
+- Open an [issue](https://github.com/Verryx-02/spot_downloader/issues) with details
+- Include your OS version and Python version
+- Share the full error message
+- Pleace do not share private informations
+
+Your feedback helps improve cross-platform compatibility!
+
 ## Installation
 
+### Option 1: Download from GitHub Release (Recommended)
+
+1. Download the latest release from [Releases](https://github.com/Verryx-02/spot-downloader/releases)
+2. Extract the archive
+3. Install:
 ```bash
-git clone https://github.com/Verryx-02/spot-downloader.git
+   cd spot-downloader-1.0.0
+   pip install -e .
+```
+
+### Option 2: Install from Source (for developers)
+```bash
+git clone https://github.com/Verryx-02/spot_downloader.git
 cd spot-downloader
 pip install -e .
 ```
