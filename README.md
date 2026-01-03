@@ -47,10 +47,7 @@ The result is a collection of properly tagged M4A files ready for any music play
 **Hard Links & Symlinks:**  
 The application uses hard links to prevent file duplication across playlists. On Windows, this may require running Command Prompt or PowerShell as **Administrator**.
 
-
-**Alternative:** If you encounter permission errors, the application automatically falls back to symbolic links. If both fail, please report the issue.
-
-**FFmpeg:** Windows users must install FFmpeg manually and add it to PATH ([installation guide](https://windowsloop.com/install-ffmpeg-windows-10/)).
+Windows users must install FFmpeg manually and add it to PATH ([installation guide](https://windowsloop.com/install-ffmpeg-windows-10/)).
 
 ### Help Us Test!
 
@@ -66,11 +63,11 @@ Your feedback helps improve cross-platform compatibility!
 
 ### Option 1: Download from GitHub Release (Recommended)
 
-1. Download the latest release from [Releases](https://github.com/Verryx-02/spot-downloader/releases)
+1. Download the latest release from [Releases](https://github.com/Verryx-02/spot_downloader/releases)
 2. Extract the archive
 3. Install:
 ```bash
-   cd spot-downloader-1.0.0
+   cd spot_downloader-1.0.0
    pip install -e .
 ```
 
