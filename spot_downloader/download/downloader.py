@@ -704,7 +704,7 @@ class Downloader:
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "m4a",
-                    "preferredquality": "0",  # Best quality
+                    "preferredquality": "256",  # 256 kbps - matches YouTube Premium quality
                 }
             ],
             
