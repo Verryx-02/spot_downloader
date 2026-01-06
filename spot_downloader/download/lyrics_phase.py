@@ -372,9 +372,9 @@ def fetch_lyrics_phase4(
         # Rate limit
         rate_limiter.wait()
         
-        # Fetch lyrics
+        # Fetch lyrics (returns tuple: plain, synced)
         try:
-            lyrics = fetcher.fetch_lyrics(
+            plain_lyrics, synced_lyrics = fetcher.fetch_lyrics(
                 track_name=track_name,
                 artist=artist,
                 album=album,
@@ -382,31 +382,45 @@ def fetch_lyrics_phase4(
             )
         except Exception as e:
             logger.debug(f"Lyrics fetch exception for {track_name}: {e}")
-            lyrics = None
+            plain_lyrics = None
+            synced_lyrics = None
         
-        if lyrics:
+        # Check if we found anything
+        found_any = plain_lyrics is not None or synced_lyrics is not None
+        
+        if found_any:
             # Success - update database
             rate_limiter.on_success()
             
             try:
-                # Save PLAIN TEXT (no timestamps) in database for embedding
-                plain_text = lyrics.get_plain_text()
+                # Get plain text for embedding
+                # (plain_lyrics is never None here if synced was found, 
+                # because fetch_lyrics derives it)
+                plain_text = plain_lyrics.text if plain_lyrics else ""
+                
+                # Determine if we have synced lyrics
+                has_synced = synced_lyrics is not None
+                
+                # Determine source (prefer plain source, fallback to synced)
+                source = plain_lyrics.source if plain_lyrics else (
+                    synced_lyrics.source if synced_lyrics else "unknown"
+                )
                 
                 database.set_lyrics(
                     spotify_id=spotify_id,
                     lyrics_text=plain_text,  # Plain text for embedding
-                    is_synced=lyrics.is_synced,
-                    source=lyrics.source
+                    is_synced=has_synced,
+                    source=source
                 )
                 
                 lrc_created = 0
                 lrc_links = 0
                 
                 # Create .lrc file WITH TIMESTAMPS if synced and we have a file path
-                if lyrics.is_synced and file_path:
+                if synced_lyrics and file_path:
                     lrc_path = _get_lrc_path(file_path)
-                    # Write original text WITH timestamps to .lrc file
-                    if _write_lrc_file(lrc_path, lyrics):
+                    # Write synced text WITH timestamps to .lrc file
+                    if _write_lrc_file(lrc_path, synced_lyrics):
                         lrc_created = 1
                         
                         # Create hard links in playlist directories
@@ -422,7 +436,7 @@ def fetch_lyrics_phase4(
                 
                 return TrackResult(
                     found=True,
-                    is_synced=lyrics.is_synced,
+                    is_synced=has_synced,
                     lrc_created=lrc_created,
                     lrc_links=lrc_links
                 )

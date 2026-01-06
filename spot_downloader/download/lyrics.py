@@ -5,11 +5,23 @@ This module handles fetching song lyrics from various providers.
 Lyrics are OPTIONAL - failure to fetch lyrics should never prevent
 a track from being downloaded and saved.
 
-Providers (in order of priority):
-    1. Synced (syncedlyrics library) - Timestamped LRC lyrics
-    2. Genius - Plain text lyrics (requires scraping)
-    3. AZLyrics - Plain text lyrics (requires scraping)
-    4. MusixMatch - Plain text lyrics (via syncedlyrics fallback)
+Provider Strategy:
+    The module performs two separate searches:
+    
+    1. Plain text lyrics (for embedding in audio files):
+       Genius → AZLyrics
+       These providers have better quality/moderation for plain text.
+    
+    2. Synced LRC lyrics (for separate .lrc files):
+       NetEase → Lrclib (synced_only=True)
+       These providers support timestamped lyrics.
+    
+    If plain text is not found but LRC is found, plain text is derived
+    from the LRC by stripping timestamps.
+
+Excluded Providers:
+    - Musixmatch: Aggressive rate limiting (401 errors)
+    - Megalobiz, Deezer, Lyricsify: Broken/unreliable
 
 FRAGILE WARNING:
     Lyrics scraping is inherently fragile because:
@@ -25,15 +37,16 @@ Usage:
     
     fetcher = LyricsFetcher()
     
-    # Try to get lyrics (returns None on failure)
-    lyrics = fetcher.fetch_lyrics("Song Title", "Artist Name")
+    # Get both plain and synced lyrics
+    plain, synced = fetcher.fetch_lyrics("Song Title", "Artist Name")
     
-    if lyrics:
-        # Embed in file
-        embed_lyrics(file_path, lyrics)
-    else:
-        # Continue without lyrics - this is fine
-        logger.debug("No lyrics found, continuing without")
+    if plain:
+        # Embed plain text in audio file
+        embed_lyrics(file_path, plain)
+    
+    if synced:
+        # Save .lrc file
+        save_lrc_file(lrc_path, synced)
 """
 
 import re
@@ -275,12 +288,13 @@ class LyricsFetcher:
         artist: str,
         album: str | None = None,
         duration_seconds: int | None = None
-    ) -> Lyrics | None:
+    ) -> tuple[Lyrics | None, Lyrics | None]:
         """
-        Fetch lyrics for a track from any available provider.
+        Fetch lyrics for a track from multiple providers.
         
-        This is the main method for fetching lyrics. It tries each
-        provider in order until one returns lyrics or all fail.
+        Performs two separate searches:
+        1. Plain text (Genius → AZLyrics) for embedding in audio
+        2. Synced LRC (NetEase → Lrclib) for .lrc files
         
         Args:
             track_name: The song title.
@@ -289,65 +303,76 @@ class LyricsFetcher:
             duration_seconds: Optional duration (for synced lyrics matching).
         
         Returns:
-            Lyrics object if found, None if all providers failed.
-        
-        Behavior:
-            1. Try syncedlyrics provider (for LRC lyrics)
-            2. If failed, try Genius
-            3. If failed, try AZLyrics
-            4. If failed, try MusixMatch (plain text via syncedlyrics)
-            5. Return first successful result or None
+            Tuple of (plain_lyrics, synced_lyrics).
+            Either or both can be None if not found.
+            If plain is not found but synced is, plain is derived from synced.
         
         Error Handling:
             - Provider errors are caught and logged
-            - Never raises exceptions (returns None)
-            - Each provider failure moves to next provider
+            - Never raises exceptions (returns None values)
         """
-        providers_tried = []
+        plain_lyrics: Lyrics | None = None
+        synced_lyrics: Lyrics | None = None
         
-        # 1. Try syncedlyrics (for LRC timestamped lyrics)
-        if self._syncedlyrics_available:
-            logger.debug(f"Trying syncedlyrics for: {artist} - {track_name}")
-            providers_tried.append("syncedlyrics")
-            
-            result = self._try_synced_lyrics(track_name, artist, duration_seconds)
-            if result:
-                logger.debug(f"Found {'synced' if result.is_synced else 'plain'} lyrics via syncedlyrics")
-                return result
-            
-            # Small delay before next provider
+        # =====================================================================
+        # STEP 1: Search for plain text lyrics (for embedding)
+        # Priority: Genius → AZLyrics (better quality/moderation)
+        # =====================================================================
+        
+        # Try Genius first
+        logger.debug(f"Trying Genius for plain text: {artist} - {track_name}")
+        plain_lyrics = self._try_genius(track_name, artist)
+        
+        if plain_lyrics:
+            logger.debug("Found plain lyrics via Genius")
+        else:
+            # Try AZLyrics
             time.sleep(BASE_DELAY + random.uniform(0, 0.3))
+            logger.debug(f"Trying AZLyrics for plain text: {artist} - {track_name}")
+            plain_lyrics = self._try_azlyrics(track_name, artist)
+            
+            if plain_lyrics:
+                logger.debug("Found plain lyrics via AZLyrics")
         
-        # 2. Try Genius
-        logger.debug(f"Trying Genius for: {artist} - {track_name}")
-        providers_tried.append("genius")
+        # =====================================================================
+        # STEP 2: Search for synced LRC lyrics (for .lrc files)
+        # Priority: NetEase → Lrclib (synced_only=True)
+        # =====================================================================
         
-        result = self._try_genius(track_name, artist)
-        if result:
-            logger.debug("Found lyrics via Genius")
-            return result
+        if self._syncedlyrics_available:
+            time.sleep(BASE_DELAY + random.uniform(0, 0.3))
+            logger.debug(f"Trying syncedlyrics for LRC: {artist} - {track_name}")
+            synced_lyrics = self._try_synced_lyrics_lrc(track_name, artist, duration_seconds)
+            
+            if synced_lyrics:
+                logger.debug("Found synced LRC lyrics via syncedlyrics")
         
-        time.sleep(BASE_DELAY + random.uniform(0, 0.3))
+        # =====================================================================
+        # STEP 3: If no plain but synced found, derive plain from synced
+        # =====================================================================
         
-        # 3. Try AZLyrics
-        logger.debug(f"Trying AZLyrics for: {artist} - {track_name}")
-        providers_tried.append("azlyrics")
+        if plain_lyrics is None and synced_lyrics is not None:
+            logger.debug("Deriving plain text from synced LRC")
+            plain_text = synced_lyrics.get_plain_text()
+            plain_lyrics = Lyrics(
+                text=plain_text,
+                is_synced=False,
+                source=f"{synced_lyrics.source}-derived"
+            )
         
-        result = self._try_azlyrics(track_name, artist)
-        if result:
-            logger.debug("Found lyrics via AZLyrics")
-            return result
+        # Log final result
+        if plain_lyrics is None and synced_lyrics is None:
+            logger.debug(f"No lyrics found for: {artist} - {track_name}")
+        else:
+            logger.debug(
+                f"Lyrics result for {artist} - {track_name}: "
+                f"plain={'yes' if plain_lyrics else 'no'}, "
+                f"synced={'yes' if synced_lyrics else 'no'}"
+            )
         
-        # 4. MusixMatch is already covered by syncedlyrics
-        # No additional provider needed
-        
-        logger.debug(
-            f"No lyrics found for: {artist} - {track_name} "
-            f"(tried: {', '.join(providers_tried)})"
-        )
-        return None
+        return (plain_lyrics, synced_lyrics)
     
-    def _try_synced_lyrics(
+    def _try_synced_lyrics_lrc(
         self,
         track_name: str,
         artist: str,
@@ -356,17 +381,16 @@ class LyricsFetcher:
         """
         Try to fetch synced (LRC) lyrics using syncedlyrics library.
         
+        Only searches for synced lyrics (synced_only=True).
+        Uses NetEase and Lrclib - providers that support timestamped lyrics.
+        
         Args:
             track_name: Song title.
             artist: Artist name.
             duration_seconds: Track duration for matching.
         
         Returns:
-            Lyrics object if found, None otherwise.
-        
-        Behavior:
-            Uses syncedlyrics library to search for LRC lyrics.
-            Library handles multiple backends (Musixmatch, Lrclib, etc.)
+            Lyrics object with is_synced=True if found, None otherwise.
         """
         try:
             import syncedlyrics
@@ -378,36 +402,35 @@ class LyricsFetcher:
             # SpotDL format: "{track} - {artist}"
             search_query = f"{clean_track} - {clean_artist}"
             
-            # Only use reliable providers (exclude Musixmatch - aggressive rate limiting with 401 errors)
-            # Also exclude broken ones: Megalobiz, Deezer, Lyricsify
-            working_providers = ["Lrclib", "NetEase", "Genius"]
+            # Only providers that support synced LRC lyrics
+            # Musixmatch excluded - aggressive rate limiting (401 errors)
+            lrc_providers = ["NetEase", "Lrclib"]
             
             try:
                 lyrics_text = syncedlyrics.search(
                     search_query,
-                    synced_only=False,
-                    providers=working_providers,
+                    synced_only=True,  # Only synced LRC
+                    providers=lrc_providers,
                 )
             except requests.exceptions.SSLError:
-                # Max retries reached (spotDL handles this)
                 return None
             except TypeError:
-                # Error at syncedlyrics.providers.musixmatch - body occasionally empty list
-                # (spotDL handles this)
                 return None
             except Exception as e:
-                logger.debug(f"syncedlyrics search error: {e}")
+                logger.debug(f"syncedlyrics LRC search error: {e}")
                 return None
             
             if not lyrics_text or len(lyrics_text.strip()) < 10:
                 return None
             
-            # Check if we got synced or plain lyrics
-            is_synced = _is_lrc_format(lyrics_text)
+            # Verify it's actually synced
+            if not _is_lrc_format(lyrics_text):
+                logger.debug("syncedlyrics returned non-LRC text despite synced_only=True")
+                return None
             
             return Lyrics(
                 text=lyrics_text.strip(),
-                is_synced=is_synced,
+                is_synced=True,
                 source="syncedlyrics"
             )
             
@@ -415,7 +438,7 @@ class LyricsFetcher:
             logger.debug("syncedlyrics not installed")
             return None
         except Exception as e:
-            logger.debug(f"syncedlyrics error: {e}")
+            logger.debug(f"syncedlyrics LRC error: {e}")
             return None
     
     def _try_genius(self, track_name: str, artist: str) -> Lyrics | None:
@@ -677,7 +700,7 @@ def fetch_lyrics_for_track(
     artist: str,
     album: str | None = None,
     duration_seconds: int | None = None
-) -> Lyrics | None:
+) -> tuple[Lyrics | None, Lyrics | None]:
     """
     Convenience function to fetch lyrics without creating fetcher instance.
     
@@ -691,12 +714,14 @@ def fetch_lyrics_for_track(
         duration_seconds: Optional duration.
     
     Returns:
-        Lyrics if found, None otherwise.
+        Tuple of (plain_lyrics, synced_lyrics). Either can be None.
     
     Example:
-        lyrics = fetch_lyrics_for_track("Song Title", "Artist")
-        if lyrics:
-            print(lyrics.text)
+        plain, synced = fetch_lyrics_for_track("Song Title", "Artist")
+        if plain:
+            print(plain.text)
+        if synced:
+            save_lrc(synced.text)
     """
     fetcher = LyricsFetcher()
     return fetcher.fetch_lyrics(track_name, artist, album, duration_seconds)
