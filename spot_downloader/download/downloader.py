@@ -16,14 +16,23 @@ Architecture:
         └── 00001-Bohemian Rhapsody-Queen.m4a → ../tracks/Bohemian Rhapsody-Queen.m4a
 
 PHASE 3 Workflow:
-    1. Get tracks with YouTube URL but not downloaded from database
-    2. For each track:
+    1. Check for tracks that failed in previous runs
+       - If found, ask user if they want to retry
+       - If yes, reset file_path to allow re-download
+    2. Get tracks with YouTube URL but not downloaded from database
+    3. For each track:
        a. Download audio from YouTube using yt-dlp
        b. Convert to M4A format using FFmpeg (via yt-dlp postprocessor)
        c. Save to tracks/ directory with canonical name: {title}-{artist}.m4a
        d. Update database: downloaded=True, file_path (canonical path)
        e. Create hard links in ALL playlist directories containing this track
-    3. Generate statistics
+       f. On failure: set file_path=DOWNLOAD_FAILED (prevents auto-retry)
+    4. Generate statistics
+
+Retry Logic:
+    When download fails, file_path is set to DOWNLOAD_FAILED.
+    This prevents automatic retry on next run.
+    User must explicitly confirm retry when prompted.
 
 Audio Quality:
     - Free YouTube: 128 kbps (maximum available)
@@ -375,6 +384,11 @@ class Downloader:
         
         Thread Safety:
             This method is thread-safe. Uses per-track temp directories.
+        
+        Failure Handling:
+            On failure, marks the track with file_path=DOWNLOAD_FAILED in database.
+            This prevents automatic retry on next run. User must confirm retry
+            when prompted in PHASE 3.
         """
         # Extract track info
         spotify_id = track_data.get("spotify_id") or track_data.get("track_id")
@@ -415,6 +429,7 @@ class Downloader:
                     spotify_url=spotify_url,
                     error_message="yt-dlp returned no file"
                 )
+                self._database.mark_download_failed(spotify_id)
                 return False
             
             # Move to canonical location in tracks/
@@ -439,6 +454,7 @@ class Downloader:
                 spotify_url=spotify_url,
                 error_message=str(e)
             )
+            self._database.mark_download_failed(spotify_id)
             return False
         except Exception as e:
             log_download_failure(
@@ -448,6 +464,7 @@ class Downloader:
                 spotify_url=spotify_url,
                 error_message=f"Unexpected error: {e}"
             )
+            self._database.mark_download_failed(spotify_id)
             return False
         finally:
             # Clean up temp directory

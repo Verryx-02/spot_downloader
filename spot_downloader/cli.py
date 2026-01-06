@@ -975,7 +975,9 @@ def _run_phase3(
         num_threads: Number of parallel downloads.
     
     Behavior:
-        1. Log phase start
+        1. Check for tracks that failed in previous runs
+           - If found, ask user if they want to retry
+           - If yes, reset file_path to allow re-download
         2. Get tracks with youtube_url but not downloaded (global)
         3. For each track:
            a. Download audio from YouTube using yt-dlp
@@ -983,8 +985,14 @@ def _run_phase3(
            c. Save to tracks/ with canonical name: {title}-{artist}.m4a
            d. Update database: downloaded=True, file_path (canonical path)
            e. Create hard links in ALL playlist directories containing this track
+           f. On failure: set file_path=DOWNLOAD_FAILED (prevents auto-retry)
         4. Log download statistics
         5. Write failures to download_failures.log
+    
+    Retry Logic:
+        When download fails, file_path is set to DOWNLOAD_FAILED.
+        This prevents automatic retry on next run.
+        User must explicitly confirm retry when prompted.
     
     File Naming:
         - Canonical (in tracks/): {title}-{artist}.m4a
@@ -995,13 +1003,22 @@ def _run_phase3(
         Those operations are handled by PHASE 4 and PHASE 5.
     
     Database Updates:
-        - Sets downloaded=True
-        - Sets file_path to the canonical path in tracks/
+        - Sets downloaded=True on success
+        - Sets file_path to the canonical path in tracks/ on success
+        - Sets file_path=DOWNLOAD_FAILED on failure
         - Sets download_timestamp
     """
     logger.info("=" * 60)
     logger.info("PHASE 3: Downloading audio files")
     logger.info("=" * 60)
+    
+    # Check if there are tracks where download failed previously
+    failed_count = database.count_failed_downloads()
+    if failed_count > 0:
+        logger.info(f"Found {failed_count} tracks that failed in previous runs")
+        if click.confirm("Do you want to retry downloading these tracks?", default=False):
+            reset_count = database.reset_failed_downloads()
+            logger.info(f"Reset {reset_count} tracks for retry")
     
     # Get tracks needing download (global - not playlist-specific)
     tracks = database.get_tracks_needing_download()

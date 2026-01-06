@@ -40,6 +40,7 @@ from spot_downloader.core.exceptions import DatabaseError
 DATABASE_VERSION = 3
 LIKED_SONGS_KEY = "__liked_songs__"
 YOUTUBE_MATCH_FAILED = "MATCH_FAILED"
+DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
 
 
 _SCHEMA_SQL = """
@@ -597,7 +598,7 @@ class Database:
                 return self._fetch_tracks_with_id(cursor)
     
     def get_tracks_needing_download(self) -> list[dict[str, Any]]:
-        """Get all tracks matched but not downloaded."""
+        """Get all tracks matched but not downloaded (excludes previously failed)."""
         with self._lock:
             with self._get_connection() as conn:
                 cursor = conn.execute("""
@@ -605,8 +606,9 @@ class Database:
                     WHERE youtube_url IS NOT NULL 
                     AND youtube_url != ?
                     AND downloaded = 0
+                    AND (file_path IS NULL OR file_path != ?)
                     ORDER BY created_at
-                """, (YOUTUBE_MATCH_FAILED,))
+                """, (YOUTUBE_MATCH_FAILED, DOWNLOAD_FAILED))
                 return self._fetch_tracks_with_id(cursor)
     
     def get_tracks_needing_lyrics(self) -> list[dict[str, Any]]:
@@ -832,6 +834,61 @@ class Database:
                     WHERE lyrics_fetched = 1 AND lyrics_text IS NULL
                 """)
                 return cursor.fetchone()[0]
+    
+    def count_failed_downloads(self) -> int:
+        """
+        Count tracks where download was attempted but failed.
+        
+        Returns:
+            Number of tracks with file_path = DOWNLOAD_FAILED.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM global_tracks
+                    WHERE file_path = ?
+                """, (DOWNLOAD_FAILED,))
+                return cursor.fetchone()[0]
+    
+    def reset_failed_downloads(self) -> int:
+        """
+        Reset file_path for tracks where download previously failed.
+        
+        This allows re-trying download for tracks that previously failed.
+        
+        Returns:
+            Number of tracks reset.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                now = self._now_iso()
+                cursor = conn.execute("""
+                    UPDATE global_tracks 
+                    SET file_path = NULL, updated_at = ?
+                    WHERE file_path = ?
+                """, (now, DOWNLOAD_FAILED))
+                conn.commit()
+                return cursor.rowcount
+    
+    def mark_download_failed(self, spotify_id: str) -> None:
+        """
+        Mark a track as having failed to download.
+        
+        Sets file_path to DOWNLOAD_FAILED so it won't be retried
+        automatically on the next run.
+        
+        Args:
+            spotify_id: Spotify track ID.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                now = self._now_iso()
+                conn.execute("""
+                    UPDATE global_tracks 
+                    SET file_path = ?, updated_at = ?
+                    WHERE spotify_id = ?
+                """, (DOWNLOAD_FAILED, now, spotify_id))
+                conn.commit()
     
     # =========================================================================
     # Statistics
