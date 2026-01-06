@@ -376,7 +376,3 @@ The following metadata is embedded in each M4A file:
 ## License
 
 [MIT](LICENSE)
-
-<a href="https://ko-fi.com/verryx02">
-  <img src="Asset/support_me_on_kofi_beige.png" alt="Support me on Ko-fi" width="170">
-</a>
