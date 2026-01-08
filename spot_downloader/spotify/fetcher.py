@@ -93,7 +93,7 @@ class SpotifyFetcher:
         
         Args:
             playlist_url: Full Spotify playlist URL.
-            sync_mode: If True, only return tracks not already in database.
+            sync_mode: If True, only return tracks not yet downloaded.
         
         Returns:
             Tuple of (Playlist, list[Track]) for subsequent phases.
@@ -125,11 +125,13 @@ class SpotifyFetcher:
         tracks = self._create_track_objects(valid_items, artist_map, album_map)
         logger.info(f"Successfully parsed {len(tracks)} tracks")
         
-        # 6. Get existing track IDs BEFORE modifying database (for sync mode filtering)
+        # 6. Get downloaded track IDs (for sync mode filtering)
+        # We filter by downloaded=1, not just "exists in DB", so that tracks
+        # added in a previous sync but not downloaded can be retried.
         if sync_mode:
-            existing_track_ids = self._database.get_playlist_track_ids(playlist_id)
+            downloaded_track_ids = self._database.get_downloaded_track_ids(playlist_id)
         else:
-            existing_track_ids = set()
+            downloaded_track_ids = set()
         
         # 7. Assign position numbers based on Spotify order
         tracks = _assign_track_numbers(tracks)
@@ -150,15 +152,15 @@ class SpotifyFetcher:
         if removed > 0:
             logger.info(f"Removed {removed} tracks no longer in playlist")
         
-        # 11. Filter for sync mode (return only NEW tracks for phases 2-5)
+        # 11. Filter for sync mode (return only tracks not yet downloaded for phases 2-5)
         if sync_mode:
-            new_tracks = [t for t in tracks if t.spotify_id not in existing_track_ids]
-            logger.info(f"Sync mode: {len(new_tracks)} new tracks to process")
+            new_tracks = [t for t in tracks if t.spotify_id not in downloaded_track_ids]
+            logger.info(f"Sync mode: {len(new_tracks)} tracks to process")
             tracks_for_phases = new_tracks
         else:
             tracks_for_phases = tracks
         
-        # 11. Create Playlist object
+        # 12. Create Playlist object
         playlist = Playlist.from_spotify_api(playlist_data, tracks)
         
         return playlist, tracks_for_phases
@@ -168,7 +170,7 @@ class SpotifyFetcher:
         Fetch user's Liked Songs (saved tracks).
         
         Args:
-            sync_mode: If True, only return tracks not already in database.
+            sync_mode: If True, only return tracks not yet downloaded.
         
         Returns:
             Tuple of (LikedSongs, list[Track]) for subsequent phases.
@@ -201,11 +203,13 @@ class SpotifyFetcher:
         tracks = self._create_track_objects(valid_items, artist_map, album_map)
         logger.info(f"Successfully parsed {len(tracks)} tracks")
         
-        # 5. Get existing track IDs BEFORE modifying database (for sync mode filtering)
+        # 5. Get downloaded track IDs (for sync mode filtering)
+        # We filter by downloaded=1, not just "exists in DB", so that tracks
+        # added in a previous sync but not downloaded can be retried.
         if sync_mode:
-            existing_track_ids = self._database.get_liked_songs_track_ids()
+            downloaded_track_ids = self._database.get_downloaded_liked_songs_ids()
         else:
-            existing_track_ids = set()
+            downloaded_track_ids = set()
         
         # 6. Assign position numbers based on Spotify order
         # For Liked Songs: position 1 = most recently liked (top of list)
@@ -223,10 +227,10 @@ class SpotifyFetcher:
         if removed > 0:
             logger.info(f"Removed {removed} tracks no longer in Liked Songs")
         
-        # 10. Filter for sync mode (return only NEW tracks for phases 2-5)
+        # 10. Filter for sync mode (return only tracks not yet downloaded for phases 2-5)
         if sync_mode:
-            new_tracks = [t for t in tracks if t.spotify_id not in existing_track_ids]
-            logger.info(f"Sync mode: {len(new_tracks)} new tracks to process")
+            new_tracks = [t for t in tracks if t.spotify_id not in downloaded_track_ids]
+            logger.info(f"Sync mode: {len(new_tracks)} tracks to process")
             tracks_for_phases = new_tracks
         else:
             tracks_for_phases = tracks

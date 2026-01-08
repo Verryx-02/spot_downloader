@@ -472,6 +472,37 @@ class Database:
         """Convenience method for sync mode with liked songs."""
         return self.get_playlist_track_ids(LIKED_SONGS_KEY)
     
+    def get_downloaded_track_ids(self, playlist_id: str) -> set[str]:
+        """
+        Get Spotify track IDs that have been downloaded in a playlist.
+        
+        Unlike get_playlist_track_ids(), this only returns tracks with
+        downloaded=1. Used by sync mode to determine which tracks still
+        need to be processed.
+        
+        Args:
+            playlist_id: Spotify playlist ID or LIKED_SONGS_KEY.
+        
+        Returns:
+            Set of spotify_id strings for downloaded tracks.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                db_id = self._get_playlist_db_id(conn, playlist_id)
+                if db_id is None:
+                    return set()
+                
+                cursor = conn.execute("""
+                    SELECT g.spotify_id FROM global_tracks g
+                    JOIN playlist_tracks pt ON g.id = pt.track_id
+                    WHERE pt.playlist_id = ? AND g.downloaded = 1
+                """, (db_id,))
+                return {row[0] for row in cursor.fetchall()}
+    
+    def get_downloaded_liked_songs_ids(self) -> set[str]:
+        """Convenience method for sync mode with liked songs."""
+        return self.get_downloaded_track_ids(LIKED_SONGS_KEY)
+    
     def get_playlist_tracks(self, playlist_id: str) -> list[dict[str, Any]]:
         """Get all tracks in a playlist, ordered by position."""
         with self._lock:
