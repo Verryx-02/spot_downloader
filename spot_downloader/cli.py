@@ -142,7 +142,7 @@ logger = get_logger(__name__)
 
 
 # Version string (if updated, update also in config.toml)
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 
 @click.group(invoke_without_command=True)

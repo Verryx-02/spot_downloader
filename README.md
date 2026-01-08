@@ -67,7 +67,7 @@ Your feedback helps improve cross-platform compatibility!
 2. Extract the archive
 3. Install:
 ```bash
-   cd spot_downloader-1.0.0
+   cd spot_downloader-1.0.1
    pip install -e .
 ```
 

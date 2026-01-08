@@ -45,7 +45,7 @@ labels: bug
 
 - OS: <!-- e.g., macOS 14.2 -->
 - Python version: <!-- e.g., 3.12 -->
-- spot-downloader version: <!-- e.g., 1.0.0 -->
+- spot-downloader version: <!-- e.g., 1.0.1 -->
 
 ## Additional Context
 
