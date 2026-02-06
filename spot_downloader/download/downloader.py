@@ -706,7 +706,7 @@ class Downloader:
             
             # Enable remote JS challenge solver (requires deno)
             # This is needed for some age-restricted/protected videos
-            "remote_components": "ejs:github",
+            "remote_components": {"ejs:github"},
             
             # Try multiple YouTube player clients (fixes "format not available")
             # This is the key fix from spotDL issues
