@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS global_tracks (
     duration_ms INTEGER,
     spotify_url TEXT,
     isrc TEXT,
-    cover_url TEXT,
+    cover_url TEXT,  -- URL for album art download in PHASE 5
     release_date TEXT,
     track_number INTEGER,
     disc_number INTEGER,
@@ -81,23 +81,39 @@ CREATE TABLE IF NOT EXISTS global_tracks (
     preview_url TEXT,
     metadata TEXT,  -- JSON blob for full Spotify response
     
-    -- YouTube matching
+    -- YouTube matching (PHASE 2)
+    -- youtube_url can be:
+    --   NULL = not yet matched
+    --   'MATCH_FAILED' = match attempted but no video found
+    --   valid URL = successfully matched
     youtube_url TEXT,
     match_score REAL,
     match_timestamp TEXT,
     
-    -- Download state
+    -- Download state (PHASE 3)
+    -- downloaded: 0 = not downloaded, 1 = successfully downloaded
+    -- file_path can be:
+    --   NULL = not yet attempted (will be processed by PHASE 3)
+    --   'DOWNLOAD_FAILED' = download attempted but failed (will retry automatically only if user says yes)
+    --   path string = successfully downloaded (file exists on disk)
     downloaded INTEGER DEFAULT 0,
     download_timestamp TEXT,
     file_path TEXT,
     
-    -- Lyrics
+    -- Lyrics (PHASE 4)
+        -- lyrics_fetched: 0 = not attempted, 1 = attempted
+        -- lyrics_text: NULL = no lyrics found, text = lyrics content (plain text for embedding)
     lyrics_fetched INTEGER DEFAULT 0,
     lyrics_text TEXT,
     lyrics_synced INTEGER DEFAULT 0,
     lyrics_source TEXT,
     
-    -- Metadata embedding
+    -- Metadata embedding (PHASE 5)
+        -- All flags: 0 = not embedded, 1 = successfully embedded
+        -- These flags are independent:
+        --   metadata_embedded = basic metadata (title, artist, album, etc.)
+        --   lyrics_embedded = lyrics text embedded in file
+        --   cover_embedded = album artwork embedded in file
     metadata_embedded INTEGER DEFAULT 0,
     lyrics_embedded INTEGER DEFAULT 0,
     cover_embedded INTEGER DEFAULT 0,
@@ -667,6 +683,7 @@ class Database:
                     SELECT * FROM global_tracks
                     WHERE downloaded = 1 AND (
                         metadata_embedded = 0 
+                        OR cover_embedded = 0
                         OR (lyrics_fetched = 1 AND lyrics_text IS NOT NULL AND lyrics_embedded = 0)
                     )
                     ORDER BY created_at
