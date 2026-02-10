@@ -273,12 +273,13 @@ def _embed_single_track(
     
     # Determine what to embed
     metadata_already_embedded = track_data.get("metadata_embedded", False)
+    cover_already_embedded = track_data.get("cover_embedded", False)
     lyrics_text = track_data.get("lyrics_text")
     has_lyrics = lyrics_text is not None and len(lyrics_text) > 0
     
     try:
-        if metadata_already_embedded:
-            # Only embed lyrics
+        if metadata_already_embedded and cover_already_embedded:
+            # Only embed lyrics (metadata and cover already present)
             if has_lyrics:
                 lyrics = Lyrics(
                     text=lyrics_text,
@@ -297,11 +298,11 @@ def _embed_single_track(
                 
                 logger.debug(f"Embedded lyrics only for: {track_name}")
             else:
-                # Nothing to do (metadata embedded, no lyrics)
+                # Nothing to do (metadata and cover embedded, no lyrics)
                 result["success"] = True
-                logger.debug(f"Nothing to embed for: {track_name} (metadata done, no lyrics)")
+                logger.debug(f"Nothing to embed for: {track_name} (metadata and cover done, no lyrics)")
         else:
-            # Full embedding
+            # Full embedding (metadata, cover, and/or lyrics missing)
             track = Track.from_database_dict(spotify_id, track_data)
             
             # Create lyrics object if available
