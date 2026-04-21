@@ -25,6 +25,12 @@ The result is a collection of properly tagged M4A files ready for any music play
 - Hard link architecture: shared tracks stored once, linked to multiple playlists
 - Resume interrupted downloads
 
+
+> [!WARNING]
+> Due to the recent changes in the Spotify API, this application only works if you have Spotify Premium. 
+> Every application that needs to call the Spotify API is affected by this problem. For more information you can read [this](https://github.com/spotDL/spotify-downloader/pull/2626)
+
+
 ## Requirements
 
 - Python 3.11+
